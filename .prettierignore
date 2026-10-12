@@ -1,0 +1,11 @@
+.next
+AGENTS.md
+coverage
+docs/TECHNICAL_BLUEPRINT.md
+docs/tickets
+Lumina_POS_Agent_Starter_Pack.zip
+node_modules
+package-lock.json
+playwright-report
+test-results
+

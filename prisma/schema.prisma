@@ -1,0 +1,12 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// LUM-001 intentionally defines no domain models. Business tables require an
+// approved ERD and a future ticket.
+
