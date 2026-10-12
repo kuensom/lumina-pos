@@ -1,13 +1,16 @@
 # LUM-002-A — Codex Architecture Review (DESIGN ONLY)
+
 Read AGENTS.md, docs/TECHNICAL_BLUEPRINT.md, docs/DECISIONS.md and docs/LUM-002-RBAC-Approved-Design.md.
 
 Approved requirements:
+
 - Login by username OR optional email, plus password; no public registration.
 - **Administrator-assisted password recovery**, without email/SMS provider.
 - Staff member must create their own password through a one-time, short-lived, hashed reset secret.
 - Reset and role/deactivation changes revoke or immediately restrict existing sessions.
 
 Produce:
+
 1. Auth library shortlist, final recommendation, maintained compatible versions for currently pinned Next.js/React/Prisma, and reasoned tradeoffs.
 2. Exact proposed Prisma schema, field types, unique constraints, FKs, delete behavior and indexes for Users, Roles, Permissions, memberships, Sessions, recovery tokens and AuditEvents.
 3. Account bootstrap and administrator-assisted recovery workflow with token delivery and verification, password hashing, revocation, audit redaction and reset replay prevention.

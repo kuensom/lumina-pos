@@ -1,7 +1,9 @@
 # Lumina POS — LUM-002 Identity and RBAC Design Baseline
+
 Version 1.1 | 12 October 2026 | Status: Product decisions approved; technical architecture pending approval
 
 ## Approved decisions
+
 1. Staff sign in using either a username or an email address plus a password.
 2. Username is mandatory and unique, ignoring case. Email is optional and unique when provided, ignoring case. No public self-registration.
 3. Password recovery is **administrator-assisted**. No outbound email/SMS password-reset integration in LUM-002.
@@ -9,6 +11,7 @@ Version 1.1 | 12 October 2026 | Status: Product decisions approved; technical ar
 5. Staff accounts are provisioned by authorised administration, with no hard-coded default credentials.
 
 ## Administrator-assisted recovery — approved business policy
+
 - An authorised administrator initiates a reset only after verifying the staff member's identity through a documented in-person/organisational process.
 - Do not disclose existing passwords or set a permanent password on behalf of staff.
 - Issue a short-lived, single-use, cryptographically random reset/enrolment secret, stored **only as a digest**. The staff member chooses their own new password through a protected setup flow.
@@ -19,6 +22,7 @@ Version 1.1 | 12 October 2026 | Status: Product decisions approved; technical ar
 - Codex must propose practical token delivery/custody mechanics and protect against shoulder-surfing or replay. Product owner approves that detail before implementation.
 
 ## Identity / schema requirements
+
 User: id, mandatory username, usernameNormalized (unique), optional email, emailNormalized (unique when nonnull), displayName, passwordHash or library-equivalent credential, status, authzVersion, timestamps.
 Role: id, immutable unique code, name, description, isSystemRole, isActive, timestamps.
 Permission: id, immutable unique `resource:action` code, description, resource, action.
@@ -30,15 +34,18 @@ AuditEvent: immutable event identity, nullable actor, type, target, outcome, red
 Auth-library adapter models may be added only if justified. All FK deletion rules and indexes must be proposed in the ERD before migrations.
 
 ## Initial permission matrix
+
 Permissions: dashboard:view; users:read/create/update/deactivate; roles:read/create/update/assign; permissions:read/assign; audit:read.
+
 - Super Administrator: all LUM-002 permissions; additional guard for granting super-admin or changing critical configuration.
 - Administrator: dashboard:view; users:read/create/update/deactivate for non-super-admin accounts; roles:read/assign (non-privileged roles); permissions:read; audit:read limited to staff administrative events.
 - Supervisor: dashboard:view; users:read limited to minimum staff directory.
 - Cashier / Sales Staff: dashboard:view.
 - Wholesale Sales Staff: dashboard:view.
-Reserved future permissions do not create functioning sales/stock/wholesale endpoints.
+  Reserved future permissions do not create functioning sales/stock/wholesale endpoints.
 
 ## Security invariants
+
 - Distinguish authentication from authorisation; check protected reads and mutations on the server.
 - No privilege escalation through crafted requests or the union of assigned roles. Enforce special-role protections outside the ordinary configurable permission list.
 - Prevent deactivating/removing the last active Super Administrator under concurrent requests inside a database transaction.
@@ -49,6 +56,7 @@ Reserved future permissions do not create functioning sales/stock/wholesale endp
 - No real customer data, payments, retail operations, inventory or production deployment in LUM-002.
 
 ## Acceptance tests
+
 1. Username/password login and optional email/password login for same user.
 2. Case-insensitive uniqueness; nullable email permits multiple users without email.
 3. Generic error for nonexistent account / wrong password / inactive account.
@@ -61,6 +69,7 @@ Reserved future permissions do not create functioning sales/stock/wholesale endp
 10. Typecheck, lint, unit, Postgres integration, end-to-end browser tests and production build pass.
 
 ## Decisions awaiting approval before coding
+
 - MFA policy: recommended mandatory for Super Administrator before production.
 - Session policy: proposed 30-minute idle timeout, 12-hour absolute lifetime, allow multiple devices with global revocation.
 - Username format: proposed 3–32 ASCII characters [a-z0-9._-], case-insensitive.
@@ -70,4 +79,5 @@ Reserved future permissions do not create functioning sales/stock/wholesale endp
 - Whether step-up authentication for super-admin privilege assignment is implemented in LUM-002 or held for a separate preproduction gate.
 
 ## Gate
+
 This document is a product requirements baseline. Codex's next task is design-only: no code, database migration, commits, deployment or merge without review of its architecture proposal.
