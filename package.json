@@ -19,7 +19,7 @@
     "test:e2e": "playwright test",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "prisma:connect": "prisma db execute --stdin < prisma/connectivity.sql"
+    "prisma:connect": "prisma db execute --schema prisma/schema.prisma --stdin < prisma/connectivity.sql"
   },
   "dependencies": {
     "@prisma/client": "6.12.0",
