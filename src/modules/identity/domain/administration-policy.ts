@@ -18,6 +18,21 @@ const optionalText = (maximum: number) =>
     .transform((value) => (value === "" ? null : value));
 const idList = z.array(z.string().uuid()).max(100).transform(deduplicate);
 
+// Custom roles assignable by an ordinary Administrator must be incapable of
+// delegating identity or administration authority. Expand this allowlist only
+// through a reviewed catalogue/policy change.
+export const OPERATIONAL_PERMISSION_CODES = ["dashboard:view"] as const;
+const operationalPermissionCodes = new Set<string>(
+  OPERATIONAL_PERMISSION_CODES,
+);
+const canonicalOperationalSystemRoles: Readonly<
+  Record<string, ReadonlySet<string>>
+> = {
+  cashier: new Set(["dashboard:view"]),
+  supervisor: new Set(["dashboard:view", "users:read"]),
+  wholesale_sales: new Set(["dashboard:view"]),
+};
+
 export const createStaffSchema = z
   .object({
     username: z.string().max(320).transform(normalizeUsername),
@@ -165,17 +180,24 @@ export function isProtectedAccount(
 }
 
 export function isOperationalRole(
-  role: Pick<Role, "code" | "isActive" | "isProtected"> & {
+  role: Pick<Role, "code" | "isActive" | "isProtected" | "isSystem"> & {
     permissions: readonly {
-      permission: Pick<Permission, "requiresSuperAdmin">;
+      permission: Pick<Permission, "code" | "requiresSuperAdmin">;
     }[];
   },
 ): boolean {
+  const permissionCodes = role.permissions.map(
+    ({ permission }) => permission.code,
+  );
+  const canonicalPermissions = role.isSystem
+    ? canonicalOperationalSystemRoles[role.code]
+    : undefined;
+  const allowedPermissions = canonicalPermissions ?? operationalPermissionCodes;
   return (
     role.isActive &&
     !role.isProtected &&
-    role.code !== "administrator" &&
-    role.code !== "super_administrator" &&
+    (!role.isSystem || canonicalPermissions !== undefined) &&
+    permissionCodes.every((code) => allowedPermissions.has(code)) &&
     role.permissions.every(({ permission }) => !permission.requiresSuperAdmin)
   );
 }

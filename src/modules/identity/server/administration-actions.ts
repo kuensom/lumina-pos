@@ -18,6 +18,7 @@ import {
 import { AdministrationPolicyError } from "../domain/administration-policy";
 import { prisma } from "../infrastructure/prisma";
 import { assertSameOrigin } from "../security/request-security";
+import { AuthenticationRequiredError, PermissionDeniedError } from "./guards";
 import { claimsFromCurrentCookies } from "./session-token";
 
 export type AdministrationActionState = {
@@ -113,11 +114,7 @@ export async function changeUsernameAction(
       revalidatePath("/admin/staff");
       return success("Username changed. Existing sessions were revoked.");
     },
-    denialRecorder(
-      () => claims,
-      "user",
-      () => value(data, "userId"),
-    ),
+    denialRecorder(() => claims),
   );
 }
 
@@ -236,13 +233,7 @@ async function profileAction(
       revalidatePath("/admin/staff");
       return success("Staff profile updated. Existing sessions were revoked.");
     },
-    authority === "protected"
-      ? denialRecorder(
-          () => claims,
-          "user",
-          () => value(data, "userId"),
-        )
-      : undefined,
+    authority === "protected" ? denialRecorder(() => claims) : undefined,
   );
 }
 
@@ -275,13 +266,7 @@ async function statusAction(
       revalidatePath("/admin/staff");
       return success("Account status updated. Existing sessions were revoked.");
     },
-    authority === "protected"
-      ? denialRecorder(
-          () => claims,
-          "user",
-          () => value(data, "userId"),
-        )
-      : undefined,
+    authority === "protected" ? denialRecorder(() => claims) : undefined,
   );
 }
 
@@ -312,13 +297,7 @@ async function roleAssignmentAction(
         "Role assignments updated. Existing sessions were revoked.",
       );
     },
-    authority === "protected"
-      ? denialRecorder(
-          () => claims,
-          "user",
-          () => value(data, "userId"),
-        )
-      : undefined,
+    authority === "protected" ? denialRecorder(() => claims) : undefined,
   );
 }
 
@@ -331,17 +310,29 @@ async function requestClaims() {
 
 async function run(
   operation: () => Promise<AdministrationActionState>,
-  onPolicyError?: (error: AdministrationPolicyError) => Promise<void>,
+  onDenial?: (
+    reason: "PROTECTED_OPERATION_DENIED" | "MALFORMED_PROTECTED_REQUEST",
+  ) => Promise<void>,
 ): Promise<AdministrationActionState> {
   try {
     return await operation();
   } catch (error) {
     if (error instanceof AdministrationPolicyError) {
-      if (onPolicyError) await onPolicyError(error).catch(() => undefined);
+      if (onDenial)
+        await onDenial("PROTECTED_OPERATION_DENIED").catch(() => undefined);
       return { ok: false, message: error.message };
     }
     if (error instanceof Error && error.name === "ZodError") {
+      if (onDenial)
+        await onDenial("MALFORMED_PROTECTED_REQUEST").catch(() => undefined);
       return { ok: false, message: "Review the highlighted form values." };
+    }
+    if (
+      onDenial &&
+      (error instanceof PermissionDeniedError ||
+        error instanceof AuthenticationRequiredError)
+    ) {
+      await onDenial("PROTECTED_OPERATION_DENIED").catch(() => undefined);
     }
     return initialFailure;
   }
@@ -349,18 +340,16 @@ async function run(
 
 function denialRecorder(
   claims: () => Awaited<ReturnType<typeof requestClaims>> | undefined,
-  targetType: "user" | "role",
-  targetId: () => string,
 ) {
-  return async (error: AdministrationPolicyError) => {
+  return async (
+    reasonCode: "PROTECTED_OPERATION_DENIED" | "MALFORMED_PROTECTED_REQUEST",
+  ) => {
     const currentClaims = claims();
     if (!currentClaims) return;
     await recordProtectedAdministrationDenial({
       prisma,
       claims: currentClaims,
-      targetType,
-      targetId: targetId() || null,
-      reasonCode: error.code,
+      reasonCode,
     });
   };
 }

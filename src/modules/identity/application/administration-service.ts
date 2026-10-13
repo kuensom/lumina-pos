@@ -22,6 +22,7 @@ import {
 import type { AuthClaims } from "../server/auth-claims";
 import {
   type AuthenticatedPrincipal,
+  withAuthenticatedTransaction,
   withAuthorizedTransaction,
 } from "../server/guards";
 
@@ -699,24 +700,43 @@ export async function listAdministrationAudit(input: {
 export async function recordProtectedAdministrationDenial(input: {
   prisma: PrismaClient;
   claims: AuthClaims;
-  targetType: "user" | "role";
-  targetId: string | null;
-  reasonCode: AdministrationPolicyError["code"];
+  reasonCode: "PROTECTED_OPERATION_DENIED" | "MALFORMED_PROTECTED_REQUEST";
+  now?: Date;
 }) {
-  return authorizedMutation(input, {
-    permission: "users:manage_super_admin",
+  const now = input.now ?? new Date();
+  const reasonCode =
+    input.reasonCode === "MALFORMED_PROTECTED_REQUEST"
+      ? "MALFORMED_PROTECTED_REQUEST"
+      : "PROTECTED_OPERATION_DENIED";
+  return withAuthenticatedTransaction({
+    prisma: input.prisma,
+    claims: input.claims,
+    now,
     operation: async (tx, principal) => {
+      await tx.$queryRaw`
+        SELECT pg_advisory_xact_lock(
+          hashtextextended(${`ADMIN_DENIAL:${principal.userId}`}, 0)
+        )::text
+      `;
+      const recentCount = await tx.auditEvent.count({
+        where: {
+          actorUserId: principal.userId,
+          eventType: "identity.protected_change_denied",
+          outcome: "DENIED",
+          createdAt: { gte: new Date(now.getTime() - 15 * 60_000) },
+        },
+      });
+      if (recentCount >= 5) return { recorded: false as const };
       await tx.auditEvent.create({
         data: {
           actorUserId: principal.userId,
           eventType: "identity.protected_change_denied",
-          targetType: input.targetType,
-          targetId: input.targetId,
           outcome: "DENIED",
           correlationId: randomUUID(),
-          metadata: { reasonCode: input.reasonCode },
+          metadata: { reasonCode },
         },
       });
+      return { recorded: true as const };
     },
   });
 }

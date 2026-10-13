@@ -58,17 +58,57 @@ describe("staff administration policy", () => {
   it("classifies only active non-administrator non-privileged roles as operational", () => {
     const base = {
       code: "cashier",
+      isSystem: true,
       isActive: true,
       isProtected: false,
-      permissions: [{ permission: { requiresSuperAdmin: false } }],
+      permissions: [
+        {
+          permission: {
+            code: "dashboard:view",
+            requiresSuperAdmin: false,
+          },
+        },
+      ],
     };
     expect(isOperationalRole(base)).toBe(true);
     expect(isOperationalRole({ ...base, code: "administrator" })).toBe(false);
     expect(
       isOperationalRole({
         ...base,
-        permissions: [{ permission: { requiresSuperAdmin: true } }],
+        isSystem: false,
+        code: "custom_operations",
+        permissions: [
+          {
+            permission: {
+              code: "users:update",
+              requiresSuperAdmin: false,
+            },
+          },
+        ],
       }),
     ).toBe(false);
+    expect(
+      isOperationalRole({
+        ...base,
+        isSystem: false,
+        code: "mixed_custom",
+        permissions: [
+          ...base.permissions,
+          {
+            permission: {
+              code: "roles:assign",
+              requiresSuperAdmin: false,
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isOperationalRole({
+        ...base,
+        isSystem: false,
+        code: "custom_dashboard",
+      }),
+    ).toBe(true);
   });
 });

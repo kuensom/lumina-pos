@@ -125,6 +125,31 @@ export async function withAuthorizedTransaction<T>(input: {
   );
 }
 
+export async function withAuthenticatedTransaction<T>(input: {
+  prisma: PrismaClient;
+  claims: unknown;
+  operation: (
+    transaction: Prisma.TransactionClient,
+    principal: AuthenticatedPrincipal,
+  ) => Promise<T>;
+  now?: Date;
+}): Promise<T> {
+  const now = input.now ?? new Date();
+  return retrySerializableTransaction(() =>
+    input.prisma.$transaction(
+      async (transaction) => {
+        const principal = await validateInTransaction(
+          transaction,
+          input.claims,
+          now,
+        );
+        return input.operation(transaction, principal);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
+  );
+}
+
 async function validateInTransaction(
   transaction: Prisma.TransactionClient,
   untrustedClaims: unknown,

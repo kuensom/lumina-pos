@@ -7,6 +7,8 @@ import {
   createRole,
   createStaff,
   listStaff,
+  recordProtectedAdministrationDenial,
+  replaceRolePermissions,
   replaceUserRoles,
   updateStaffProfile,
 } from "../../src/modules/identity/application/administration-service";
@@ -164,6 +166,219 @@ describe("staff and role administration", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("rejects custom and mixed administrative roles for ordinary assignments", async () => {
+    const [dashboard, usersUpdate] = await Promise.all([
+      prisma.permission.findUniqueOrThrow({
+        where: { code: "dashboard:view" },
+      }),
+      prisma.permission.findUniqueOrThrow({ where: { code: "users:update" } }),
+    ]);
+    const created = await createRole({
+      prisma,
+      claims: superAdministrator.claims,
+      command: {
+        code: `mixed_admin_${randomUUID().slice(0, 8)}`,
+        name: "Mixed administrative role",
+        description: "Test only",
+        permissionIds: [dashboard.id, usersUpdate.id],
+      },
+    });
+    createdRoleIds.push(created.id);
+    const target = await principal("cashier");
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: target.userId },
+    });
+    await expect(
+      createStaff({
+        prisma,
+        claims: administrator.claims,
+        command: {
+          username: `tampered.${randomUUID().slice(0, 8)}`,
+          email: "",
+          displayName: "Tampered role request",
+          roleIds: [created.id],
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      replaceUserRoles({
+        prisma,
+        claims: administrator.claims,
+        authority: "ordinary",
+        command: {
+          userId: target.userId,
+          roleIds: [created.id],
+          reason: "Tampered role identifier",
+          expectedUpdatedAt: before.updatedAt,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    await expect(
+      replaceUserRoles({
+        prisma,
+        claims: superAdministrator.claims,
+        authority: "protected",
+        command: {
+          userId: target.userId,
+          roleIds: [created.id],
+          reason: "Approved privileged assignment",
+          expectedUpdatedAt: before.updatedAt,
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("re-evaluates operational eligibility after role permission changes", async () => {
+    const [dashboard, usersUpdate] = await Promise.all([
+      prisma.permission.findUniqueOrThrow({
+        where: { code: "dashboard:view" },
+      }),
+      prisma.permission.findUniqueOrThrow({ where: { code: "users:update" } }),
+    ]);
+    const created = await createRole({
+      prisma,
+      claims: superAdministrator.claims,
+      command: {
+        code: `changing_role_${randomUUID().slice(0, 8)}`,
+        name: "Changing operational role",
+        description: "Test only",
+        permissionIds: [dashboard.id],
+      },
+    });
+    createdRoleIds.push(created.id);
+    const firstTarget = await principal("cashier");
+    const firstBefore = await prisma.user.findUniqueOrThrow({
+      where: { id: firstTarget.userId },
+    });
+    await replaceUserRoles({
+      prisma,
+      claims: administrator.claims,
+      authority: "ordinary",
+      command: {
+        userId: firstTarget.userId,
+        roleIds: [created.id],
+        reason: "Operational assignment",
+        expectedUpdatedAt: firstBefore.updatedAt,
+      },
+    });
+    const roleBefore = await prisma.role.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    await replaceRolePermissions({
+      prisma,
+      claims: superAdministrator.claims,
+      command: {
+        roleId: created.id,
+        permissionIds: [dashboard.id, usersUpdate.id],
+        reason: "Reviewed administrative role change",
+        expectedUpdatedAt: roleBefore.updatedAt,
+      },
+    });
+    await expect(
+      prisma.session.findUniqueOrThrow({
+        where: { id: firstTarget.claims.sessionId },
+      }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+
+    const secondTarget = await principal("cashier");
+    const secondBefore = await prisma.user.findUniqueOrThrow({
+      where: { id: secondTarget.userId },
+    });
+    await expect(
+      replaceUserRoles({
+        prisma,
+        claims: administrator.claims,
+        authority: "ordinary",
+        command: {
+          userId: secondTarget.userId,
+          roleIds: [created.id],
+          reason: "Role is no longer operational",
+          expectedUpdatedAt: secondBefore.updatedAt,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("records authenticated protected denials without protected permission and suppresses floods", async () => {
+    const actor = await principal("administrator");
+    const start = new Date();
+    const results = [];
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      results.push(
+        await recordProtectedAdministrationDenial({
+          prisma,
+          claims: actor.claims,
+          reasonCode: "PROTECTED_OPERATION_DENIED",
+          now: new Date(start.getTime() + attempt),
+        }),
+      );
+    }
+    expect(results.filter(({ recorded }) => recorded)).toHaveLength(5);
+    expect(results.filter(({ recorded }) => !recorded)).toHaveLength(2);
+    const events = await prisma.auditEvent.findMany({
+      where: {
+        actorUserId: actor.userId,
+        eventType: "identity.protected_change_denied",
+      },
+    });
+    expect(events).toHaveLength(5);
+    expect(
+      events.every(
+        (event) =>
+          event.outcome === "DENIED" &&
+          event.targetId === null &&
+          event.targetType === null,
+      ),
+    ).toBe(true);
+    expect(
+      events.every(
+        (event) =>
+          JSON.stringify(event.metadata) ===
+          '{"reasonCode":"PROTECTED_OPERATION_DENIED"}',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not record unauthenticated denials or expose target existence", async () => {
+    const before = await prisma.auditEvent.count({
+      where: { eventType: "identity.protected_change_denied" },
+    });
+    await expect(
+      recordProtectedAdministrationDenial({
+        prisma,
+        claims: { ...administrator.claims, sessionBinding: "invalid-binding" },
+        reasonCode: "PROTECTED_OPERATION_DENIED",
+      }),
+    ).rejects.toThrow("Invalid session");
+    await expect(
+      prisma.auditEvent.count({
+        where: { eventType: "identity.protected_change_denied" },
+      }),
+    ).resolves.toBe(before);
+
+    const existing = await prisma.user.findUniqueOrThrow({
+      where: { id: superAdministrator.userId },
+    });
+    const commands = [existing.id, randomUUID()].map((userId) =>
+      updateStaffProfile({
+        prisma,
+        claims: administrator.claims,
+        authority: "protected",
+        command: {
+          userId,
+          displayName: "Hidden target probe",
+          email: "",
+          reason: "Probe",
+          expectedUpdatedAt: existing.updatedAt,
+        },
+      }).catch((error: unknown) => error),
+    );
+    const [existingResult, missingResult] = await Promise.all(commands);
+    expect(existingResult).toMatchObject({ message: "Permission denied." });
+    expect(missingResult).toMatchObject({ message: "Permission denied." });
   });
 
   it("rejects stale profile commands without partial mutation", async () => {
