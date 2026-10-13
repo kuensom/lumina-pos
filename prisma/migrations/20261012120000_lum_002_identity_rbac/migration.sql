@@ -217,17 +217,43 @@ ALTER TABLE "password_reset_grants" ADD CONSTRAINT "password_reset_grants_user_i
 ALTER TABLE "password_reset_grants" ADD CONSTRAINT "password_reset_grants_requested_by_id_fkey" FOREIGN KEY ("requested_by_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_actor_user_id_fkey" FOREIGN KEY ("actor_user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- System role identifiers and security classifications are migration-owned.
-CREATE FUNCTION "reject_role_security_update"() RETURNS trigger
+-- System-role creation and protected-role activity are migration-owned. The
+-- runtime may create and maintain configurable roles, but cannot manufacture a
+-- role that the authorization layer would trust as part of the system
+-- catalogue or deactivate the canonical Super Administrator role.
+CREATE FUNCTION "enforce_role_catalog_guard"() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+  caller_is_catalog_owner boolean;
 BEGIN
-  IF (
+  SELECT pg_has_role(current_user, c.relowner, 'USAGE')
+  INTO caller_is_catalog_owner
+  FROM pg_class AS c
+  WHERE c.oid = TG_RELID;
+
+  IF TG_OP = 'INSERT' THEN
+    IF ((NEW).is_system OR (NEW).is_protected) AND NOT caller_is_catalog_owner THEN
+      RAISE EXCEPTION 'system roles are migration-owned';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF
     (NEW).code IS DISTINCT FROM (OLD).code OR
     (NEW).is_system IS DISTINCT FROM (OLD).is_system OR
     (NEW).is_protected IS DISTINCT FROM (OLD).is_protected
-  ) THEN
+  THEN
     RAISE EXCEPTION 'role security fields are immutable';
   END IF;
+
+  IF
+    (OLD).code = 'super_administrator' AND
+    (NEW).is_active IS DISTINCT FROM (OLD).is_active AND
+    NOT caller_is_catalog_owner
+  THEN
+    RAISE EXCEPTION 'the canonical Super Administrator role is migration-owned';
+  END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -247,9 +273,9 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER "roles_security_fields_immutable"
-BEFORE UPDATE ON "roles"
-FOR EACH ROW EXECUTE FUNCTION "reject_role_security_update"();
+CREATE TRIGGER "roles_catalog_guard"
+BEFORE INSERT OR UPDATE ON "roles"
+FOR EACH ROW EXECUTE FUNCTION "enforce_role_catalog_guard"();
 
 CREATE TRIGGER "permissions_security_fields_immutable"
 BEFORE UPDATE ON "permissions"
@@ -330,6 +356,30 @@ $$;
 CREATE TRIGGER "role_permissions_invalidate_authorization"
 AFTER INSERT OR UPDATE OR DELETE ON "role_permissions"
 FOR EACH ROW EXECUTE FUNCTION "invalidate_role_authorization"();
+
+-- Activating or deactivating a role changes the effective permissions of every
+-- assigned user. Invalidation occurs in the role update transaction so neither
+-- state can commit without the other.
+CREATE FUNCTION "invalidate_role_activity_authorization"() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF (NEW).is_active IS DISTINCT FROM (OLD).is_active THEN
+    UPDATE "users" AS u
+    SET "authz_version" = u."authz_version" + 1,
+        "updated_at" = CURRENT_TIMESTAMP
+    WHERE EXISTS (
+      SELECT 1 FROM "user_roles" AS ur
+      WHERE ur."user_id" = u."id" AND ur."role_id" = (NEW).id
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "roles_activity_invalidate_authorization"
+AFTER UPDATE OF "is_active" ON "roles"
+FOR EACH ROW EXECUTE FUNCTION "invalidate_role_activity_authorization"();
 
 CREATE FUNCTION "invalidate_user_role_authorization"() RETURNS trigger
 LANGUAGE plpgsql AS $$

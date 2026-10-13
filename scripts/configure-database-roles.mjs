@@ -85,7 +85,12 @@ async function configureRuntimePrivileges() {
   );
 
   await execute(`GRANT SELECT, INSERT, UPDATE ON TABLE users TO ${runtime}`);
-  await execute(`GRANT SELECT, INSERT, UPDATE ON TABLE roles TO ${runtime}`);
+  // Prisma supplies schema defaults in role INSERT statements, so the trigger
+  // is the authoritative guard against runtime system-role creation.
+  await execute(`GRANT SELECT, INSERT ON TABLE roles TO ${runtime}`);
+  await execute(
+    `GRANT UPDATE (name, description, is_active, updated_at) ON TABLE roles TO ${runtime}`,
+  );
   await execute(`GRANT SELECT ON TABLE permissions TO ${runtime}`);
   await execute(
     `GRANT SELECT, INSERT, DELETE ON TABLE user_roles TO ${runtime}`,

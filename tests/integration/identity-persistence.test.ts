@@ -100,6 +100,137 @@ describe("identity catalogue persistence", () => {
     ).rejects.toThrow("protected capability grants are immutable");
   });
 
+  it("denies runtime catalogue escalation and preserves migration-owner updates", async () => {
+    await seedInitialIdentityCatalog(migrationPrisma);
+    const suffix = randomUUID().slice(0, 8);
+    const superAdministrator = await prisma.role.findUniqueOrThrow({
+      where: { code: "super_administrator" },
+    });
+
+    await expect(
+      prisma.role.update({
+        where: { id: superAdministrator.id },
+        data: { isActive: false },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.role.create({
+        data: {
+          code: `runtime_system_${suffix}`,
+          name: "Forbidden Runtime System Role",
+          isSystem: true,
+        },
+      }),
+    ).rejects.toThrow();
+
+    const configurableRole = await prisma.role.create({
+      data: {
+        code: `runtime_role_${suffix}`,
+        name: "Runtime Configurable Role",
+      },
+    });
+    await expect(
+      prisma.role.update({
+        where: { id: configurableRole.id },
+        data: { isSystem: true },
+      }),
+    ).rejects.toThrow();
+    const reviewedSystemRole = await migrationPrisma.role.create({
+      data: {
+        code: `migration_system_${suffix}`,
+        name: "Reviewed Migration System Role",
+        isSystem: true,
+      },
+    });
+
+    expect(configurableRole.isSystem).toBe(false);
+    expect(reviewedSystemRole.isSystem).toBe(true);
+    await expect(
+      prisma.role.findUniqueOrThrow({ where: { id: superAdministrator.id } }),
+    ).resolves.toMatchObject({ isActive: true });
+    await expect(
+      prisma.role.findUnique({ where: { code: `runtime_system_${suffix}` } }),
+    ).resolves.toBeNull();
+    await migrationPrisma.role.deleteMany({
+      where: { id: { in: [configurableRole.id, reviewedSystemRole.id] } },
+    });
+  });
+
+  it("atomically invalidates assigned users when role activity changes", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const role = await prisma.role.create({
+      data: { code: `activity_${suffix}`, name: "Activity Test Role" },
+    });
+    const activeUsername = `active.role.${suffix}`;
+    const inactiveUsername = `inactive.role.${suffix}`;
+    const [activeUser, inactiveUser] = await Promise.all([
+      prisma.user.create({
+        data: {
+          username: activeUsername,
+          usernameNormalized: activeUsername,
+          displayName: "Active Role User",
+          status: "ACTIVE",
+          passwordHash: validPasswordHash,
+        },
+      }),
+      prisma.user.create({
+        data: {
+          username: inactiveUsername,
+          usernameNormalized: inactiveUsername,
+          displayName: "Inactive Role User",
+          status: "INACTIVE",
+        },
+      }),
+    ]);
+    await prisma.userRole.createMany({
+      data: [
+        { userId: activeUser.id, roleId: role.id },
+        { userId: inactiveUser.id, roleId: role.id },
+      ],
+    });
+    const before = await userAuthorizationVersions([
+      activeUser.id,
+      inactiveUser.id,
+    ]);
+
+    await prisma.role.update({
+      where: { id: role.id },
+      data: { isActive: false },
+    });
+    const after = await userAuthorizationVersions([
+      activeUser.id,
+      inactiveUser.id,
+    ]);
+    expect(after.get(activeUser.id)).toBe(before.get(activeUser.id)! + 1);
+    expect(after.get(inactiveUser.id)).toBe(inactiveUser.authzVersion + 1);
+
+    await expect(
+      prisma.$transaction(async (transaction) => {
+        await transaction.role.update({
+          where: { id: role.id },
+          data: { isActive: true },
+        });
+        throw new Error("force role-activity rollback");
+      }),
+    ).rejects.toThrow("force role-activity rollback");
+
+    const rolledBackRole = await prisma.role.findUniqueOrThrow({
+      where: { id: role.id },
+    });
+    const rolledBackVersions = await userAuthorizationVersions([
+      activeUser.id,
+      inactiveUser.id,
+    ]);
+    expect(rolledBackRole.isActive).toBe(false);
+    expect(rolledBackVersions).toEqual(after);
+
+    await migrationPrisma.userRole.deleteMany({ where: { roleId: role.id } });
+    await migrationPrisma.user.deleteMany({
+      where: { id: { in: [activeUser.id, inactiveUser.id] } },
+    });
+    await migrationPrisma.role.delete({ where: { id: role.id } });
+  });
+
   it("invalidates every affected active user in the permission transaction", async () => {
     await seedInitialIdentityCatalog(migrationPrisma);
     const administrator = await prisma.role.findUniqueOrThrow({
@@ -452,6 +583,22 @@ describe("security persistence", () => {
         "CREATE TEMP TABLE runtime_temp_forbidden (id integer)",
       ),
     ).rejects.toThrow();
+
+    const migrationRole = new URL(testMigrationDatabaseUrl).username;
+    if (!/^[a-z][a-z0-9_]{2,62}$/.test(migrationRole)) {
+      throw new Error("Unexpected migration database role name.");
+    }
+    await expect(
+      prisma.$executeRawUnsafe(`SET ROLE "${migrationRole}"`),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        'ALTER TABLE roles DISABLE TRIGGER "roles_catalog_guard"',
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe("SET session_replication_role = replica"),
+    ).rejects.toThrow();
   });
 
   it("rolls back a domain write when its audit write fails", async () => {
@@ -494,6 +641,16 @@ async function catalogueCounts(): Promise<{
     prisma.rolePermission.count(),
   ]);
   return { roles, permissions, grants };
+}
+
+async function userAuthorizationVersions(
+  userIds: string[],
+): Promise<Map<string, number>> {
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: { id: true, authzVersion: true },
+  });
+  return new Map(users.map(({ id, authzVersion }) => [id, authzVersion]));
 }
 
 function testDigest(): string {
