@@ -108,6 +108,11 @@ async function configureRuntimePrivileges() {
   await execute(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limit_buckets TO ${runtime}`,
   );
+  // This function only acquires the transaction-scoped advisory lock shared by
+  // the B3 service and invariant triggers; runtime cannot bypass the invariant.
+  await execute(
+    `GRANT EXECUTE ON FUNCTION lock_super_administrator_invariant() TO ${runtime}`,
+  );
 
   await execute(
     `ALTER DEFAULT PRIVILEGES FOR ROLE ${migration} IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC`,

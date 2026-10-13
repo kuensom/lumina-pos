@@ -3,7 +3,9 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/e2e",
   globalSetup: "./tests/e2e/global-setup.ts",
-  fullyParallel: true,
+  // Authentication scenarios intentionally share a disposable identity
+  // catalogue and exercise mutable rate-limit/session state.
+  fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: "html",

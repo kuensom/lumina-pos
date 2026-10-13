@@ -41,18 +41,91 @@ export default async function globalSetup() {
     data: { userId: user.id, roleId: cashier.id },
   });
 
+  const administratorUsername = `e2e.admin.${suffix}`;
+  const administratorPassword = `e2e administrator ${randomUUID()}`;
+  const administrator = await runtime.user.create({
+    data: {
+      username: administratorUsername,
+      usernameNormalized: administratorUsername,
+      displayName: "E2E Administrator",
+      status: "ACTIVE",
+      passwordHash: await hashPassword(administratorPassword),
+    },
+  });
+  const administratorRole = await runtime.role.findUniqueOrThrow({
+    where: { code: "administrator" },
+  });
+  await runtime.userRole.create({
+    data: { userId: administrator.id, roleId: administratorRole.id },
+  });
+
+  const supervisorUsername = `e2e.supervisor.${suffix}`;
+  const supervisorPassword = `e2e supervisor ${randomUUID()}`;
+  const supervisor = await createRoleFixture({
+    runtime,
+    username: supervisorUsername,
+    password: supervisorPassword,
+    displayName: "E2E Supervisor",
+    roleCode: "supervisor",
+  });
+  const superUsername = `e2e.super.${suffix}`;
+  const superPassword = `e2e super administrator ${randomUUID()}`;
+  const superAdministrator = await createRoleFixture({
+    runtime,
+    username: superUsername,
+    password: superPassword,
+    displayName: "E2E Protected Administrator",
+    roleCode: "super_administrator",
+  });
+
   process.env.LUMINA_E2E_USERNAME = username;
   process.env.LUMINA_E2E_EMAIL = email;
   process.env.LUMINA_E2E_PASSWORD = password;
   process.env.LUMINA_E2E_USER_ID = user.id;
+  process.env.LUMINA_E2E_ADMIN_USERNAME = administratorUsername;
+  process.env.LUMINA_E2E_ADMIN_PASSWORD = administratorPassword;
+  process.env.LUMINA_E2E_ADMIN_ID = administrator.id;
+  process.env.LUMINA_E2E_SUPERVISOR_USERNAME = supervisorUsername;
+  process.env.LUMINA_E2E_SUPERVISOR_PASSWORD = supervisorPassword;
+  process.env.LUMINA_E2E_SUPER_USERNAME = superUsername;
+  process.env.LUMINA_E2E_SUPER_PASSWORD = superPassword;
+  process.env.LUMINA_E2E_SUPER_ID = superAdministrator.id;
 
   return async () => {
-    await migration.session.deleteMany({ where: { userId: user.id } });
-    await migration.userRole.deleteMany({ where: { userId: user.id } });
-    await migration.user.update({
-      where: { id: user.id },
+    const userIds = [
+      user.id,
+      administrator.id,
+      supervisor.id,
+      superAdministrator.id,
+    ];
+    await migration.session.deleteMany({ where: { userId: { in: userIds } } });
+    await migration.userRole.deleteMany({ where: { userId: { in: userIds } } });
+    await migration.user.updateMany({
+      where: { id: { in: userIds } },
       data: { status: "INACTIVE", passwordHash: null },
     });
     await Promise.all([runtime.$disconnect(), migration.$disconnect()]);
   };
+}
+
+async function createRoleFixture(input: {
+  runtime: PrismaClient;
+  username: string;
+  password: string;
+  displayName: string;
+  roleCode: string;
+}) {
+  const role = await input.runtime.role.findUniqueOrThrow({
+    where: { code: input.roleCode },
+  });
+  return input.runtime.user.create({
+    data: {
+      username: input.username,
+      usernameNormalized: input.username,
+      displayName: input.displayName,
+      status: "ACTIVE",
+      passwordHash: await hashPassword(input.password),
+      roles: { create: { roleId: role.id } },
+    },
+  });
 }

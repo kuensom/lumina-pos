@@ -37,8 +37,8 @@ describe("identity catalogue persistence", () => {
 
     expect(second).toEqual(first);
     expect(first.roles).toBe(5);
-    expect(first.permissions).toBe(17);
-    expect(first.grants).toBeGreaterThan(17);
+    expect(first.permissions).toBe(20);
+    expect(first.grants).toBeGreaterThan(20);
   });
 
   it("keeps protected capability classification immutable", async () => {

@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { RECENT_AUTHENTICATION_MINUTES } from "../domain/session-policy";
+import { retrySerializableTransaction } from "../infrastructure/serializable-retry";
 import { sessionDigestKey } from "../security/auth-secrets";
 import { digestSecret } from "../security/secret-digest";
 import { authClaimsSchema, type AuthClaims } from "./auth-claims";
@@ -98,27 +99,29 @@ export async function withAuthorizedTransaction<T>(input: {
   now?: Date;
 }): Promise<T> {
   const now = input.now ?? new Date();
-  return input.prisma.$transaction(
-    async (transaction) => {
-      const principal = await validateInTransaction(
-        transaction,
-        input.claims,
-        now,
-      );
-      const permission = await effectivePermission(
-        transaction,
-        principal.userId,
-        input.permission,
-      );
-      if (!permission) throw new PermissionDeniedError("Permission denied.");
-      if (permission.requiresSuperAdmin) {
-        await assertSuperAdministrator(transaction, principal.userId);
-        assertRecentAuthentication(principal, now);
-      }
-      await refreshSessionActivity(transaction, principal.sessionId, now);
-      return input.operation(transaction, principal);
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  return retrySerializableTransaction(() =>
+    input.prisma.$transaction(
+      async (transaction) => {
+        const principal = await validateInTransaction(
+          transaction,
+          input.claims,
+          now,
+        );
+        const permission = await effectivePermission(
+          transaction,
+          principal.userId,
+          input.permission,
+        );
+        if (!permission) throw new PermissionDeniedError("Permission denied.");
+        if (permission.requiresSuperAdmin) {
+          await assertSuperAdministrator(transaction, principal.userId);
+          assertRecentAuthentication(principal, now);
+        }
+        await refreshSessionActivity(transaction, principal.sessionId, now);
+        return input.operation(transaction, principal);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    ),
   );
 }
 

@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { INITIAL_PERMISSIONS, INITIAL_ROLES } from "../domain/catalog";
+import { retrySerializableTransaction } from "./serializable-retry";
 
 type CatalogTransaction = Pick<
   Prisma.TransactionClient,
@@ -10,13 +11,15 @@ type CatalogTransaction = Pick<
 export async function seedInitialIdentityCatalog(
   prisma: PrismaClient,
 ): Promise<void> {
-  await prisma.$transaction(
-    async (transaction) => {
-      await insertAndVerifyPermissions(transaction);
-      await insertAndVerifyRoles(transaction);
-      await insertInitialGrants(transaction);
-    },
-    { isolationLevel: "Serializable" },
+  await retrySerializableTransaction(() =>
+    prisma.$transaction(
+      async (transaction) => {
+        await insertAndVerifyPermissions(transaction);
+        await insertAndVerifyRoles(transaction);
+        await insertInitialGrants(transaction);
+      },
+      { isolationLevel: "Serializable" },
+    ),
   );
 }
 
