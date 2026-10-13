@@ -7,6 +7,193 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// LUM-001 intentionally defines no domain models. Business tables require an
-// approved ERD and a future ticket.
+enum UserStatus {
+  PENDING_PASSWORD
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
 
+enum PasswordResetPurpose {
+  INITIAL_ENROLMENT
+  ADMINISTRATOR_RESET
+  PROTECTED_RECOVERY
+}
+
+enum AuditOutcome {
+  SUCCESS
+  DENIED
+  FAILURE
+}
+
+enum RateLimitScope {
+  LOGIN_IDENTIFIER
+  LOGIN_NETWORK
+  RESET_ISSUE_USER
+  RESET_ISSUE_ACTOR
+  RESET_CONSUME_TOKEN
+  RESET_CONSUME_NETWORK
+}
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  username           String     @db.VarChar(32)
+  usernameNormalized String     @unique(map: "users_username_normalized_key") @map("username_normalized") @db.VarChar(32)
+  email              String?    @db.VarChar(320)
+  emailNormalized    String?    @unique(map: "users_email_normalized_key") @map("email_normalized") @db.VarChar(320)
+  displayName        String     @map("display_name") @db.VarChar(120)
+  passwordHash       String?    @map("password_hash") @db.VarChar(512)
+  status             UserStatus @default(PENDING_PASSWORD)
+  authzVersion       Int        @default(1) @map("authz_version")
+  passwordChangedAt  DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  lastLoginAt        DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  roles                UserRole[]           @relation("RoleSubject")
+  assignedRoles        UserRole[]           @relation("RoleAssigner")
+  sessions             Session[]
+  resetGrants          PasswordResetGrant[] @relation("ResetSubject")
+  requestedResetGrants PasswordResetGrant[] @relation("ResetRequester")
+  auditEvents          AuditEvent[]         @relation("AuditActor")
+
+  @@index([status], map: "users_status_idx")
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique(map: "roles_code_key") @db.VarChar(80)
+  name        String   @db.VarChar(120)
+  description String?  @db.VarChar(500)
+  isSystem    Boolean  @default(false) @map("is_system")
+  isProtected Boolean  @default(false) @map("is_protected")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@index([isActive], map: "roles_is_active_idx")
+  @@map("roles")
+}
+
+model Permission {
+  id                 String  @id @default(uuid()) @db.Uuid
+  code               String  @unique(map: "permissions_code_key") @db.VarChar(120)
+  resource           String  @db.VarChar(60)
+  action             String  @db.VarChar(60)
+  description        String  @db.VarChar(500)
+  requiresSuperAdmin Boolean @default(false) @map("requires_super_admin")
+
+  roles RolePermission[]
+
+  @@unique([resource, action], map: "permissions_resource_action_key")
+  @@map("permissions")
+}
+
+model UserRole {
+  userId       String   @map("user_id") @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  assignedById String?  @map("assigned_by_id") @db.Uuid
+  assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  user       User  @relation("RoleSubject", fields: [userId], references: [id], onDelete: Restrict)
+  role       Role  @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assignedBy User? @relation("RoleAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@id([userId, roleId], map: "user_roles_pkey")
+  @@index([roleId], map: "user_roles_role_id_idx")
+  @@index([assignedById], map: "user_roles_assigned_by_id_idx")
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  grantedAt    DateTime @default(now()) @map("granted_at") @db.Timestamptz(3)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@id([roleId, permissionId], map: "role_permissions_pkey")
+  @@index([permissionId], map: "role_permissions_permission_id_idx")
+  @@map("role_permissions")
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  tokenHash         String    @unique(map: "sessions_token_hash_key") @map("token_hash") @db.Char(64)
+  authzVersion      Int       @map("authz_version")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  idleExpiresAt     DateTime  @map("idle_expires_at") @db.Timestamptz(3)
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(3)
+  revokeReason      String?   @map("revoke_reason") @db.VarChar(120)
+  ipHash            String?   @map("ip_hash") @db.Char(64)
+  userAgentSummary  String?   @map("user_agent_summary") @db.VarChar(250)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, revokedAt], map: "sessions_user_id_revoked_at_idx")
+  @@index([idleExpiresAt], map: "sessions_idle_expires_at_idx")
+  @@index([absoluteExpiresAt], map: "sessions_absolute_expires_at_idx")
+  @@map("sessions")
+}
+
+model PasswordResetGrant {
+  id            String               @id @default(uuid()) @db.Uuid
+  userId        String               @map("user_id") @db.Uuid
+  requestedById String?              @map("requested_by_id") @db.Uuid
+  tokenHash     String               @unique(map: "password_reset_grants_token_hash_key") @map("token_hash") @db.Char(64)
+  purpose       PasswordResetPurpose
+  expiresAt     DateTime             @map("expires_at") @db.Timestamptz(3)
+  consumedAt    DateTime?            @map("consumed_at") @db.Timestamptz(3)
+  revokedAt     DateTime?            @map("revoked_at") @db.Timestamptz(3)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user        User  @relation("ResetSubject", fields: [userId], references: [id], onDelete: Restrict)
+  requestedBy User? @relation("ResetRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, expiresAt], map: "password_reset_grants_user_id_expires_at_idx")
+  @@index([requestedById, createdAt], map: "password_reset_grants_requested_by_id_created_at_idx")
+  @@map("password_reset_grants")
+}
+
+model AuditEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  actorUserId   String?      @map("actor_user_id") @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(120)
+  targetType    String?      @map("target_type") @db.VarChar(80)
+  targetId      String?      @map("target_id") @db.VarChar(120)
+  outcome       AuditOutcome
+  correlationId String       @map("correlation_id") @db.VarChar(120)
+  ipHash        String?      @map("ip_hash") @db.Char(64)
+  metadata      Json?
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, createdAt], map: "audit_events_actor_user_id_created_at_idx")
+  @@index([eventType, createdAt], map: "audit_events_event_type_created_at_idx")
+  @@index([targetType, targetId, createdAt], map: "audit_events_target_created_at_idx")
+  @@index([correlationId], map: "audit_events_correlation_id_idx")
+  @@map("audit_events")
+}
+
+model AuthRateLimitBucket {
+  id           String         @id @default(uuid()) @db.Uuid
+  scope        RateLimitScope
+  subjectHash  String         @map("subject_hash") @db.Char(64)
+  windowStart  DateTime       @map("window_start") @db.Timestamptz(3)
+  attempts     Int            @default(0)
+  blockedUntil DateTime?      @map("blocked_until") @db.Timestamptz(3)
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([scope, subjectHash, windowStart], map: "auth_rate_limit_buckets_scope_subject_window_key")
+  @@index([blockedUntil], map: "auth_rate_limit_buckets_blocked_until_idx")
+  @@map("auth_rate_limit_buckets")
+}
