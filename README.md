@@ -1,6 +1,6 @@
 # Lumina POS
 
-Lumina POS is a planned cloud-hosted point-of-sale system for a shop in Thimphu, Bhutan. This repository contains the application foundation and the LUM-002 identity/RBAC persistence primitives. It does not yet provide working authentication, password recovery, user administration, checkout, payments, inventory operations, or production infrastructure.
+Lumina POS is a planned cloud-hosted point-of-sale system for a shop in Thimphu, Bhutan. This repository contains the application foundation and LUM-002 authentication/RBAC foundation. It provides staff username-or-email/password authentication and server-enforced sessions, but not password recovery, user administration, checkout, payments, inventory operations, or production infrastructure.
 
 ## Prerequisites
 
@@ -31,7 +31,13 @@ Open <http://localhost:3000>. The health endpoint is available at <http://localh
 
 The `.env.example` values are placeholders for local development. Replace every password in your untracked `.env`; do not reuse any outside local development. The Docker owner, migration owner, and runtime application role must remain distinct. The application uses only `DATABASE_URL`; migration commands temporarily receive `MIGRATION_DATABASE_URL`.
 
-The LUM-002 identity migration creates only identity, RBAC, session-registry, recovery-grant, rate-limit, and audit tables. Applying it does not create a user or any credential. Future schema changes require an approved ERD and migration.
+Generate independent local values for `NEXTAUTH_SECRET`, `SESSION_DIGEST_KEY`
+and `RATE_LIMIT_DIGEST_KEY`; never commit them. Forwarded client-IP headers are
+ignored by default. Set `TRUST_PROXY_HEADERS=true` only when deployment traffic
+must pass through a trusted proxy that strips all inbound forwarded headers and
+sets its own validated chain.
+
+The LUM-002 identity migration creates only identity, RBAC, session-registry, recovery-grant, rate-limit, and audit tables. Applying it does not create a user or any credential. B2 adds no migration or bootstrap account. Future schema changes require an approved ERD and migration.
 
 Stop the application with `Ctrl+C` and the local database with:
 
@@ -71,7 +77,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Playwright starts the development server automatically. The suite checks the dashboard placeholder, the explicitly disabled login placeholder, and the health endpoint.
+Playwright starts the development server automatically. Its global fixture creates a random disposable account in the test database, exercises login, encrypted cookies, logout, CSRF denial and the protected dashboard, then deactivates the account and removes its credential, memberships and sessions. The retained random user identifier preserves append-only audit foreign keys. There is no application test-account endpoint or hardcoded credential.
 
 ## PostgreSQL integration tests
 

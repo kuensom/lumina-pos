@@ -74,3 +74,31 @@ These blueprint decisions remain deliberately unresolved and must be approved be
 - The migration rollback script is for empty development/test databases only.
   Once identity or audit data exists, rollback is forward-only and must retain
   historical records.
+
+## LUM-002-B2 authentication and session decisions
+
+- Exact-pinned `next-auth@4.24.15` supplies the Credentials route, encrypted
+  JWE cookie and built-in sign-in CSRF handling. No Prisma adapter is used.
+- The encrypted cookie carries a random opaque binding value. PostgreSQL stores
+  only its domain-separated digest and remains authoritative for revocation,
+  60-minute inactivity, the immutable 12-hour absolute limit, user status and
+  `authzVersion`.
+- Username/email failures, inactive states and incorrect passwords have one
+  external result. Missing accounts still execute Argon2id verification against
+  a non-account dummy hash.
+- Login limits are five identifier failures and thirty trusted-network failures
+  per 15-minute window. Raw identifiers and network addresses are not stored in
+  rate-limit buckets or authentication audit metadata.
+- Forwarded IP headers are ignored unless `TRUST_PROXY_HEADERS=true` behind a
+  reviewed proxy that removes client-supplied forwarded headers.
+- Idle expiry refresh occurs only after authentication and authorization pass.
+  A `403`, prefetch, background polling or session callback does not refresh it.
+- Protected writes use the same database transaction for session validation,
+  current role/permission resolution, activity refresh, mutation and audit.
+- NextAuth v4 catches sign-out event failures before clearing its cookie. Lumina
+  therefore uses an origin-checked Server Action that commits revocation and
+  its audit event before deleting the cookie.
+- Multiple devices are allowed. Expired session-registry rows are retained for
+  a proposed 30 days; the final cleanup schedule remains an operations decision.
+- Protected Super Administrator operations require authentication within five
+  minutes. MFA remains mandatory before production and is not implemented here.

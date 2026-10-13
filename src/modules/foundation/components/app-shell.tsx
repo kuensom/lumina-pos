@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 
 const navigation = [
   { href: "/", label: "Dashboard" },
-  { href: "/login", label: "Login placeholder" },
+  { href: "/login", label: "Staff sign in" },
 ];
 
 export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
@@ -29,7 +29,7 @@ export function AppShell({ children }: Readonly<{ children: ReactNode }>) {
       </header>
       <div className="flex flex-1">{children}</div>
       <footer className="border-t border-slate-300 px-5 py-4 text-center text-sm text-slate-600">
-        Foundation only — no live POS operations
+        Identity foundation only — no live POS operations
       </footer>
     </div>
   );
