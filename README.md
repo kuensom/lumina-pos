@@ -1,6 +1,6 @@
 # Lumina POS
 
-Lumina POS is a planned cloud-hosted point-of-sale system for a shop in Thimphu, Bhutan. This repository currently contains the LUM-001 application foundation only. It does not provide working authentication, checkout, payments, inventory operations, or production infrastructure.
+Lumina POS is a planned cloud-hosted point-of-sale system for a shop in Thimphu, Bhutan. This repository contains the application foundation and the LUM-002 identity/RBAC persistence primitives. It does not yet provide working authentication, password recovery, user administration, checkout, payments, inventory operations, or production infrastructure.
 
 ## Prerequisites
 
@@ -20,15 +20,18 @@ cp .env.example .env
 docker compose up -d
 npm run prisma:generate
 npm run prisma:validate
+npm run db:roles -- create
+DATABASE_URL="$MIGRATION_DATABASE_URL" npx prisma migrate deploy
+npm run db:roles -- grant
 npm run prisma:connect
 npm run dev
 ```
 
 Open <http://localhost:3000>. The health endpoint is available at <http://localhost:3000/api/health>.
 
-The `.env.example` values are placeholders for local development. Replace the password in your untracked `.env`; do not reuse it outside local development. Keep `POSTGRES_*` and `DATABASE_URL` aligned.
+The `.env.example` values are placeholders for local development. Replace every password in your untracked `.env`; do not reuse any outside local development. The Docker owner, migration owner, and runtime application role must remain distinct. The application uses only `DATABASE_URL`; migration commands temporarily receive `MIGRATION_DATABASE_URL`.
 
-No migration is expected for LUM-001 because the Prisma schema intentionally contains no domain models. Future schema changes require an approved ERD and migration.
+The LUM-002 identity migration creates only identity, RBAC, session-registry, recovery-grant, rate-limit, and audit tables. Applying it does not create a user or any credential. Future schema changes require an approved ERD and migration.
 
 Stop the application with `Ctrl+C` and the local database with:
 
@@ -40,20 +43,23 @@ The named database volume is preserved. Removing it is destructive and is intent
 
 ## Commands
 
-| Command                   | Purpose                                           |
-| ------------------------- | ------------------------------------------------- |
-| `npm run dev`             | Start the Next.js development server              |
-| `npm run build`           | Produce a production build                        |
-| `npm run start`           | Serve a completed production build                |
-| `npm run typecheck`       | Run strict TypeScript checks                      |
-| `npm run lint`            | Run ESLint with warnings treated as failures      |
-| `npm run format`          | Format supported files with Prettier              |
-| `npm run format:check`    | Verify formatting without changing files          |
-| `npm test`                | Run Vitest unit tests once                        |
-| `npm run test:watch`      | Run Vitest in watch mode                          |
-| `npm run prisma:generate` | Generate the Prisma client                        |
-| `npm run prisma:validate` | Validate the Prisma schema and environment        |
-| `npm run prisma:connect`  | Execute a read-only `SELECT 1` connectivity check |
+| Command                      | Purpose                                           |
+| ---------------------------- | ------------------------------------------------- |
+| `npm run dev`                | Start the Next.js development server              |
+| `npm run build`              | Produce a production build                        |
+| `npm run start`              | Serve a completed production build                |
+| `npm run typecheck`          | Run strict TypeScript checks                      |
+| `npm run lint`               | Run ESLint with warnings treated as failures      |
+| `npm run format`             | Format supported files with Prettier              |
+| `npm run format:check`       | Verify formatting without changing files          |
+| `npm test`                   | Run Vitest unit tests once                        |
+| `npm run test:watch`         | Run Vitest in watch mode                          |
+| `npm run test:integration`   | Run PostgreSQL identity security tests            |
+| `npm run prisma:generate`    | Generate the Prisma client                        |
+| `npm run prisma:validate`    | Validate the Prisma schema and environment        |
+| `npm run prisma:connect`     | Execute a read-only `SELECT 1` connectivity check |
+| `npm run db:roles -- create` | Create/rotate local migrator and runtime roles    |
+| `npm run db:roles -- grant`  | Apply least-privilege runtime table grants        |
 
 ## Browser smoke tests
 
@@ -67,13 +73,29 @@ npm run test:e2e
 
 Playwright starts the development server automatically. The suite checks the dashboard placeholder, the explicitly disabled login placeholder, and the health endpoint.
 
+## PostgreSQL integration tests
+
+Use a disposable local database; the suite creates records and verifies denial constraints. Never point it at a shared or production database.
+
+```sh
+createdb lumina_identity_test
+npm run db:roles -- create
+DATABASE_URL="$MIGRATION_DATABASE_URL" npx prisma migrate deploy
+npm run db:roles -- grant
+TEST_DATABASE_URL="$DATABASE_URL" TEST_MIGRATION_DATABASE_URL="$MIGRATION_DATABASE_URL" npm run test:integration
+```
+
+Use only untracked local credentials. The test database name must be reflected in all three local URLs before configuring its roles. CI creates an ephemeral PostgreSQL service and validates separate migration-owner and least-privilege runtime credentials.
+
 ## Project structure
 
 ```text
-prisma/                 Empty ORM bootstrap and connectivity query
+prisma/                 ORM schema, migrations, and connectivity query
 src/app/                Next.js routes and route composition
 src/modules/foundation/ LUM-001 application-shell and health behaviour
+src/modules/identity/   LUM-002 identity policy and persistence primitives
 tests/e2e/               Browser smoke tests
+tests/integration/       PostgreSQL integration and security tests
 docs/                    Blueprint, decisions, and ticket specifications
 ```
 
@@ -81,4 +103,4 @@ Read [`src/modules/README.md`](src/modules/README.md) before adding a module. Ar
 
 ## Continuous integration
 
-GitHub Actions uses Node 20 and runs install, formatting, Prisma generation and validation, typecheck, lint, unit tests, build, and Chromium smoke tests. It supplies only a placeholder-format `DATABASE_URL`; CI does not need a running database because LUM-001 has no integration test or model migration.
+GitHub Actions uses Node 20 and an ephemeral PostgreSQL 17 service. It creates separate migration and runtime roles, applies migrations as the migration owner, applies explicit runtime grants, and runs privilege-denial integration tests. It then runs formatting, Prisma validation/generation, typecheck, lint, unit tests, build, and Chromium smoke tests. CI credentials are isolated placeholders and are not suitable for any external environment.
