@@ -11,6 +11,8 @@ import {
   recordLoginFailure,
 } from "../../src/modules/identity/infrastructure/authentication-repository";
 import { hashPassword } from "../../src/modules/identity/security/password";
+import { rateLimitDigestKey } from "../../src/modules/identity/security/auth-secrets";
+import { digestSecret } from "../../src/modules/identity/security/secret-digest";
 import {
   AuthenticationRequiredError,
   PermissionDeniedError,
@@ -77,6 +79,12 @@ describe("credentials authentication", () => {
     ).toBe(true);
     expect(JSON.stringify(sessions)).not.toContain(first!.sessionBinding);
     expect(JSON.stringify(sessions)).not.toContain(fixture.password);
+    const successAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "identity.login_succeeded", actorUserId: fixture.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(JSON.stringify(successAudit)).not.toContain(first!.sessionBinding);
+    expect(JSON.stringify(successAudit)).not.toContain(fixture.password);
   });
 
   it("returns the same failure for unknown, wrong, and inactive accounts", async () => {
@@ -124,6 +132,87 @@ describe("credentials authentication", () => {
     expect(bucket.blockedUntil).not.toBeNull();
   });
 
+  it("serializes a threshold failure ahead of concurrent valid admissions", async () => {
+    const fixture = await createActiveUser();
+    const now = new Date();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await login(fixture.username, "wrong password value", now);
+    }
+    const identifierHash = digestSecret(
+      "rate-limit",
+      fixture.username,
+      rateLimitDigestKey(),
+    );
+    const thresholdFailure = recordLoginFailure({
+      prisma,
+      identifierHash,
+      networkHash: null,
+      identifierKind: "username",
+      now,
+      correlationId: randomUUID(),
+    });
+    const validAdmissions = Array.from({ length: 6 }, () =>
+      login(fixture.username, fixture.password, now),
+    );
+
+    const [, ...sessions] = await Promise.all([
+      thresholdFailure,
+      ...validAdmissions,
+    ]);
+    expect(sessions.every((session) => session === null)).toBe(true);
+    await expect(
+      prisma.session.count({ where: { userId: fixture.id } }),
+    ).resolves.toBe(0);
+  });
+
+  it("bounds malformed credentials and suppresses blocked-attempt audit floods", async () => {
+    const before = await prisma.auditEvent.count({
+      where: { eventType: "identity.login_denied" },
+    });
+    await expect(
+      authenticateCredentials({
+        prisma,
+        identifier: "x".repeat(321),
+        password: "valid password value",
+        headers: new Headers(),
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      authenticateCredentials({
+        prisma,
+        identifier: "valid.user",
+        password: "x".repeat(129),
+        headers: new Headers(),
+      }),
+    ).resolves.toBeNull();
+    expect(
+      await prisma.auditEvent.count({
+        where: { eventType: "identity.login_denied" },
+      }),
+    ).toBe(before);
+
+    const malformed = `@${randomUUID().slice(0, 8)}`;
+    await expect(login(malformed, "valid password value")).resolves.toBeNull();
+
+    const fixture = await createActiveUser();
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await login(fixture.username, "wrong password value");
+    }
+    const after = await prisma.auditEvent.count({
+      where: { eventType: "identity.login_denied" },
+    });
+    expect(after - before).toBe(6);
+    const identifierHash = digestSecret(
+      "rate-limit",
+      fixture.username,
+      rateLimitDigestKey(),
+    );
+    const bucket = await prisma.authRateLimitBucket.findFirstOrThrow({
+      where: { scope: "LOGIN_IDENTIFIER", subjectHash: identifierHash },
+    });
+    expect(bucket.attempts).toBe(5);
+  });
+
   it("blocks a trusted network after thirty concurrent failures", async () => {
     const networkHash = randomUUID().replaceAll("-", "").repeat(2);
     const now = new Date();
@@ -149,6 +238,9 @@ describe("credentials authentication", () => {
     });
     expect(bucket.attempts).toBe(30);
     expect(bucket.blockedUntil).not.toBeNull();
+    await expect(
+      isLoginRateLimited(prisma, "unblocked-identifier", "f".repeat(64), now),
+    ).resolves.toBe(false);
   });
 });
 
@@ -162,6 +254,15 @@ describe("authoritative session and authorization guards", () => {
     const before = await prisma.session.findUniqueOrThrow({
       where: { id: session!.sessionId },
     });
+    await authenticateRequest({
+      prisma,
+      claims: session,
+      now: new Date(base.getTime() + 5 * 60_000),
+    });
+    const afterAuthenticationOnly = await prisma.session.findUniqueOrThrow({
+      where: { id: session!.sessionId },
+    });
+    expect(afterAuthenticationOnly.lastSeenAt).toEqual(before.lastSeenAt);
     await expect(
       requirePermission({
         prisma,
@@ -230,6 +331,29 @@ describe("authoritative session and authorization guards", () => {
     await expect(
       authenticateRequest({ prisma, claims: changedSession }),
     ).rejects.toBeInstanceOf(AuthenticationRequiredError);
+  });
+
+  it("does not report or persist logout when authoritative revocation fails", async () => {
+    const fixture = await createActiveUser({ roleCode: "cashier" });
+    const session = await login(fixture.username, fixture.password);
+    await expect(
+      revokeSessionForLogout({
+        prisma,
+        claims: { ...session!, sessionBinding: "invalid-binding" },
+      }),
+    ).rejects.toThrow("Invalid session.");
+    await expect(
+      prisma.session.findUniqueOrThrow({ where: { id: session!.sessionId } }),
+    ).resolves.toMatchObject({ revokedAt: null });
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          actorUserId: fixture.id,
+          eventType: "identity.logout",
+          outcome: "SUCCESS",
+        },
+      }),
+    ).resolves.toBe(0);
   });
 
   it("requires canonical Super Administrator membership and recent authentication", async () => {

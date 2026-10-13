@@ -90,7 +90,14 @@ These blueprint decisions remain deliberately unresolved and must be approved be
   per 15-minute window. Raw identifiers and network addresses are not stored in
   rate-limit buckets or authentication audit metadata.
 - Forwarded IP headers are ignored unless `TRUST_PROXY_HEADERS=true` behind a
-  reviewed proxy that removes client-supplied forwarded headers.
+  reviewed proxy that removes client-supplied `X-Lumina-Client-IP` and sets one
+  validated address. `X-Forwarded-For` and `X-Real-IP` are never trusted. When
+  no reliable peer network exists, identifier limiting remains active and the
+  network bucket is omitted to avoid a universal shop-wide denial of service.
+- Login admission uses transaction-scoped advisory locks for the identifier and
+  trusted network. The locked transaction rechecks limits before recording a
+  failure or creating a session. Attempts already blocked do not add unbounded
+  counters or audit rows.
 - Idle expiry refresh occurs only after authentication and authorization pass.
   A `403`, prefetch, background polling or session callback does not refresh it.
 - Protected writes use the same database transaction for session validation,

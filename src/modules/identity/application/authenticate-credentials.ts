@@ -9,10 +9,9 @@ import {
   PASSWORD_MIN_CHARACTERS,
 } from "../domain/identity-policy";
 import {
-  createLoginSession,
+  admitLoginAttempt,
   findLoginCandidate,
   isLoginRateLimited,
-  recordLoginFailure,
 } from "../infrastructure/authentication-repository";
 import { retrySerializableTransaction } from "../infrastructure/serializable-retry";
 import {
@@ -33,6 +32,8 @@ import type { CreatedAuthenticationSession } from "./authentication-types";
 // the same Argon2id policy as real password hashes.
 const DUMMY_PASSWORD_HASH =
   "$argon2id$v=19$m=65536,t=3,p=1$NN6KgqBF44kjOstTg0ogjg$xNeVxssKd4yD+ukJqhNkdu8GqR+zr0vzVcetDPKktN0";
+export const MAX_LOGIN_IDENTIFIER_CODE_UNITS = 320;
+export const MAX_LOGIN_PASSWORD_CODE_UNITS = 128;
 
 export async function authenticateCredentials(input: {
   prisma: PrismaClient;
@@ -43,19 +44,24 @@ export async function authenticateCredentials(input: {
 }): Promise<CreatedAuthenticationSession | null> {
   const now = input.now ?? new Date();
   const correlationId = randomUUID();
+  if (!hasBoundedCredentialFields(input.identifier, input.password)) {
+    return null;
+  }
   const parsed = parseIdentifier(input.identifier);
-  const password = typeof input.password === "string" ? input.password : "";
+  const password = input.password as string;
   const network = trustedNetworkIdentifier(input.headers);
   const rateKey = rateLimitDigestKey();
   const identifierHash = digestSecret("rate-limit", parsed.normalized, rateKey);
-  const networkHash = digestSecret("rate-limit", network, rateKey);
-
-  const rateLimited = await isLoginRateLimited(
-    input.prisma,
-    identifierHash,
-    networkHash,
-    now,
-  );
+  const networkHash = network
+    ? digestSecret("rate-limit", network, rateKey)
+    : null;
+  // This read is an optimization only. The advisory-locked admission
+  // transaction repeats the decision and remains authoritative.
+  if (
+    await isLoginRateLimited(input.prisma, identifierHash, networkHash, now)
+  ) {
+    return null;
+  }
   const candidate = parsed.valid
     ? await findLoginCandidate(input.prisma, parsed.normalized, parsed.kind)
     : null;
@@ -68,69 +74,50 @@ export async function authenticateCredentials(input: {
     password,
   );
 
-  if (
-    rateLimited ||
-    !parsed.valid ||
-    !passwordShapeValid ||
-    !candidate ||
-    candidate.status !== "ACTIVE" ||
-    !candidate.passwordHash ||
-    !passwordValid
-  ) {
-    await recordLoginFailure({
+  const sessionBinding = generateOpaqueSessionBinding();
+  const session = await retrySerializableTransaction(() =>
+    admitLoginAttempt({
       prisma: input.prisma,
+      candidate,
+      credentialsValid:
+        parsed.valid &&
+        passwordShapeValid &&
+        candidate?.status === "ACTIVE" &&
+        Boolean(candidate.passwordHash) &&
+        passwordValid,
+      identifierKind: parsed.valid ? parsed.kind : "invalid",
+      sessionBinding,
+      sessionDigestKey: sessionDigestKey(),
       identifierHash,
       networkHash,
-      identifierKind: parsed.valid ? parsed.kind : "invalid",
+      userAgentSummary: userAgentSummary(input.headers),
       now,
       correlationId,
-    });
-    return null;
-  }
+    }),
+  );
+  if (!session || !candidate) return null;
+  return {
+    id: candidate.id,
+    sub: candidate.id,
+    displayName: session.displayName,
+    sessionId: session.sessionId,
+    sessionBinding,
+    authzVersion: session.authzVersion,
+    signedInAt: now.getTime(),
+    absoluteExpiresAt: session.absoluteExpiresAt.getTime(),
+  };
+}
 
-  const sessionBinding = generateOpaqueSessionBinding();
-  try {
-    const session = await retrySerializableTransaction(() =>
-      createLoginSession({
-        prisma: input.prisma,
-        candidate,
-        sessionBinding,
-        sessionDigestKey: sessionDigestKey(),
-        identifierHash,
-        networkHash,
-        userAgentSummary: userAgentSummary(input.headers),
-        now,
-        correlationId,
-      }),
-    );
-    return {
-      id: candidate.id,
-      sub: candidate.id,
-      displayName: session.displayName,
-      sessionId: session.sessionId,
-      sessionBinding,
-      authzVersion: session.authzVersion,
-      signedInAt: now.getTime(),
-      absoluteExpiresAt: session.absoluteExpiresAt.getTime(),
-    };
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message === "LOGIN_STATE_CHANGED" ||
-        error.message === "LOGIN_RATE_LIMITED")
-    ) {
-      await recordLoginFailure({
-        prisma: input.prisma,
-        identifierHash,
-        networkHash,
-        identifierKind: parsed.kind,
-        now,
-        correlationId,
-      });
-      return null;
-    }
-    throw error;
-  }
+function hasBoundedCredentialFields(
+  identifier: unknown,
+  password: unknown,
+): identifier is string {
+  return (
+    typeof identifier === "string" &&
+    typeof password === "string" &&
+    identifier.length <= MAX_LOGIN_IDENTIFIER_CODE_UNITS &&
+    password.length <= MAX_LOGIN_PASSWORD_CODE_UNITS
+  );
 }
 
 function parseIdentifier(

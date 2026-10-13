@@ -4,18 +4,19 @@ export type HeaderSource =
   | Headers
   | Record<string, string | string[] | undefined>;
 
-export function trustedNetworkIdentifier(headers: HeaderSource): string {
+const TRUSTED_CLIENT_IP_HEADER = "x-lumina-client-ip";
+
+export function trustedNetworkIdentifier(headers: HeaderSource): string | null {
   if (process.env.TRUST_PROXY_HEADERS !== "true") {
-    return "direct-client";
+    // NextAuth does not expose the peer socket address. Without a reviewed
+    // reverse-proxy boundary, omit network limiting rather than trust a
+    // spoofable header or collapse every shop client into one shared bucket.
+    return null;
   }
 
-  const forwarded = headerValue(headers, "x-forwarded-for")
-    ?.split(",")[0]
-    ?.trim();
-  if (!forwarded || isIP(forwarded) === 0) {
-    return "invalid-forwarded-client";
-  }
-  return forwarded;
+  const clientIp = headerValue(headers, TRUSTED_CLIENT_IP_HEADER)?.trim();
+  if (!clientIp || clientIp.includes(",") || isIP(clientIp) === 0) return null;
+  return clientIp;
 }
 
 export function userAgentSummary(headers: HeaderSource): string | null {

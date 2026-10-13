@@ -10,6 +10,7 @@ import {
   sessionExpiryFrom,
 } from "../domain/session-policy";
 import { digestSecret } from "../security/secret-digest";
+import { retrySerializableTransaction } from "./serializable-retry";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 type RateScope = "LOGIN_IDENTIFIER" | "LOGIN_NETWORK";
@@ -45,15 +46,18 @@ export async function findLoginCandidate(
 export async function isLoginRateLimited(
   db: DbClient,
   identifierHash: string,
-  networkHash: string,
+  networkHash: string | null,
   now: Date,
 ): Promise<boolean> {
+  const subjects = [
+    { scope: "LOGIN_IDENTIFIER" as const, subjectHash: identifierHash },
+    ...(networkHash
+      ? [{ scope: "LOGIN_NETWORK" as const, subjectHash: networkHash }]
+      : []),
+  ];
   const buckets = await db.authRateLimitBucket.findMany({
     where: {
-      OR: [
-        { scope: "LOGIN_IDENTIFIER", subjectHash: identifierHash },
-        { scope: "LOGIN_NETWORK", subjectHash: networkHash },
-      ],
+      OR: subjects,
       blockedUntil: { gt: now },
     },
     select: { id: true },
@@ -65,46 +69,44 @@ export async function isLoginRateLimited(
 export async function recordLoginFailure(input: {
   prisma: PrismaClient;
   identifierHash: string;
-  networkHash: string;
+  networkHash: string | null;
   identifierKind: "username" | "email" | "invalid";
   now: Date;
   correlationId: string;
 }): Promise<void> {
-  await input.prisma.$transaction(async (transaction) => {
-    await incrementBucket(
-      transaction,
-      "LOGIN_IDENTIFIER",
-      input.identifierHash,
-      IDENTIFIER_FAILURE_LIMIT,
-      input.now,
-    );
-    await incrementBucket(
-      transaction,
-      "LOGIN_NETWORK",
-      input.networkHash,
-      NETWORK_FAILURE_LIMIT,
-      input.now,
-    );
-    await transaction.auditEvent.create({
-      data: {
-        eventType: "identity.login_denied",
-        outcome: "DENIED",
-        correlationId: input.correlationId,
-        metadata: {
-          reason: "INVALID_CREDENTIALS",
-          identifierKind: input.identifierKind,
-        },
+  await retrySerializableTransaction(() =>
+    input.prisma.$transaction(
+      async (transaction) => {
+        await lockRateLimitSubjects(
+          transaction,
+          input.identifierHash,
+          input.networkHash,
+        );
+        if (
+          await isLoginRateLimited(
+            transaction,
+            input.identifierHash,
+            input.networkHash,
+            input.now,
+          )
+        ) {
+          return;
+        }
+        await recordFailureInTransaction(transaction, input);
       },
-    });
-  });
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    ),
+  );
 }
 
-export async function createLoginSession(input: {
+export async function admitLoginAttempt(input: {
   prisma: PrismaClient;
-  candidate: LoginCandidate;
+  candidate: LoginCandidate | null;
+  credentialsValid: boolean;
+  identifierKind: "username" | "email" | "invalid";
   sessionBinding: string;
   sessionDigestKey: Uint8Array;
-  networkHash: string;
+  networkHash: string | null;
   userAgentSummary: string | null;
   identifierHash: string;
   now: Date;
@@ -114,9 +116,27 @@ export async function createLoginSession(input: {
   absoluteExpiresAt: Date;
   authzVersion: number;
   displayName: string;
-}> {
+} | null> {
   return input.prisma.$transaction(
     async (transaction) => {
+      await lockRateLimitSubjects(
+        transaction,
+        input.identifierHash,
+        input.networkHash,
+      );
+      const rateLimited = await isLoginRateLimited(
+        transaction,
+        input.identifierHash,
+        input.networkHash,
+        input.now,
+      );
+      if (rateLimited) return null;
+
+      if (!input.credentialsValid || !input.candidate) {
+        await recordFailureInTransaction(transaction, input);
+        return null;
+      }
+
       await transaction.$queryRaw`
         SELECT id FROM users WHERE id = ${input.candidate.id}::uuid FOR UPDATE
       `;
@@ -134,17 +154,8 @@ export async function createLoginSession(input: {
         !current.passwordHash ||
         current.passwordHash !== input.candidate.passwordHash
       ) {
-        throw new Error("LOGIN_STATE_CHANGED");
-      }
-      if (
-        await isLoginRateLimited(
-          transaction,
-          input.identifierHash,
-          input.networkHash,
-          input.now,
-        )
-      ) {
-        throw new Error("LOGIN_RATE_LIMITED");
+        await recordFailureInTransaction(transaction, input);
+        return null;
       }
 
       const sessionId = randomUUID();
@@ -196,8 +207,64 @@ export async function createLoginSession(input: {
         displayName: current.displayName,
       };
     },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
   );
+}
+
+async function recordFailureInTransaction(
+  transaction: Prisma.TransactionClient,
+  input: {
+    identifierHash: string;
+    networkHash: string | null;
+    identifierKind: "username" | "email" | "invalid";
+    now: Date;
+    correlationId: string;
+  },
+): Promise<void> {
+  await incrementBucket(
+    transaction,
+    "LOGIN_IDENTIFIER",
+    input.identifierHash,
+    IDENTIFIER_FAILURE_LIMIT,
+    input.now,
+  );
+  if (input.networkHash) {
+    await incrementBucket(
+      transaction,
+      "LOGIN_NETWORK",
+      input.networkHash,
+      NETWORK_FAILURE_LIMIT,
+      input.now,
+    );
+  }
+  await transaction.auditEvent.create({
+    data: {
+      eventType: "identity.login_denied",
+      outcome: "DENIED",
+      correlationId: input.correlationId,
+      ipHash: input.networkHash,
+      metadata: {
+        reason: "INVALID_CREDENTIALS",
+        identifierKind: input.identifierKind,
+      },
+    },
+  });
+}
+
+async function lockRateLimitSubjects(
+  transaction: Prisma.TransactionClient,
+  identifierHash: string,
+  networkHash: string | null,
+): Promise<void> {
+  const lockKeys = [
+    `LOGIN_IDENTIFIER:${identifierHash}`,
+    ...(networkHash ? [`LOGIN_NETWORK:${networkHash}`] : []),
+  ].sort();
+  for (const lockKey of lockKeys) {
+    await transaction.$queryRaw`
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))::text
+    `;
+  }
 }
 
 async function incrementBucket(

@@ -33,9 +33,11 @@ The `.env.example` values are placeholders for local development. Replace every 
 
 Generate independent local values for `NEXTAUTH_SECRET`, `SESSION_DIGEST_KEY`
 and `RATE_LIMIT_DIGEST_KEY`; never commit them. Forwarded client-IP headers are
-ignored by default. Set `TRUST_PROXY_HEADERS=true` only when deployment traffic
-must pass through a trusted proxy that strips all inbound forwarded headers and
-sets its own validated chain.
+ignored by default, and network limiting is omitted rather than grouping all
+clients into one denial-of-service-prone bucket. Set `TRUST_PROXY_HEADERS=true`
+only when all traffic must pass through a trusted proxy that strips any inbound
+`X-Lumina-Client-IP` header and sets exactly one validated client address.
+`X-Forwarded-For` and `X-Real-IP` are never used by the application.
 
 The LUM-002 identity migration creates only identity, RBAC, session-registry, recovery-grant, rate-limit, and audit tables. Applying it does not create a user or any credential. B2 adds no migration or bootstrap account. Future schema changes require an approved ERD and migration.
 

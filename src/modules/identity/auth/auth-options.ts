@@ -1,4 +1,5 @@
-import type { NextAuthOptions } from "next-auth";
+import type { NextAuthOptions, Session } from "next-auth";
+import type { JWT } from "next-auth/jwt";
 import CredentialsProvider from "next-auth/providers/credentials";
 
 import { authenticateCredentials } from "../application/authenticate-credentials";
@@ -51,15 +52,7 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      session.user = {
-        id: typeof token.sub === "string" ? token.sub : "",
-        displayName:
-          typeof token.displayName === "string" ? token.displayName : "",
-      };
-      if (typeof token.absoluteExpiresAt === "number") {
-        session.expires = new Date(token.absoluteExpiresAt).toISOString();
-      }
-      return session;
+      return clientVisibleSession(session, token);
     },
     async redirect({ url, baseUrl }) {
       return safeRedirect(url, baseUrl);
@@ -75,6 +68,17 @@ export const authOptions: NextAuthOptions = {
   },
   debug: false,
 };
+
+export function clientVisibleSession(session: Session, token: JWT): Session {
+  session.user = {
+    id: typeof token.sub === "string" ? token.sub : "",
+    displayName: typeof token.displayName === "string" ? token.displayName : "",
+  };
+  if (typeof token.absoluteExpiresAt === "number") {
+    session.expires = new Date(token.absoluteExpiresAt).toISOString();
+  }
+  return session;
+}
 
 export function safeRedirect(url: string, baseUrl: string): string {
   try {

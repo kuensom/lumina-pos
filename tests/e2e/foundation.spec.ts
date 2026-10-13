@@ -73,6 +73,19 @@ test("credentials callback rejects a missing CSRF token", async ({
   expect(response.headers().location).toContain("csrf=true");
 });
 
+test("authentication endpoint rejects an oversized request body", async ({
+  request,
+}) => {
+  const response = await request.post("/api/auth/callback/credentials", {
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    data: `identifier=${"a".repeat(5000)}`,
+  });
+  expect(response.status()).toBe(413);
+  await expect(response.json()).resolves.toEqual({
+    error: "Authentication request rejected.",
+  });
+});
+
 test("health endpoint reports the service status", async ({ request }) => {
   const response = await request.get("/api/health");
 
