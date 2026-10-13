@@ -96,12 +96,107 @@ test("health endpoint reports the service status", async ({ request }) => {
   });
 });
 
+test("administrator can create an enrollment-ready staff account", async ({
+  page,
+}) => {
+  const administratorUsername = process.env.LUMINA_E2E_ADMIN_USERNAME;
+  const administratorPassword = process.env.LUMINA_E2E_ADMIN_PASSWORD;
+  expect(administratorUsername).toBeTruthy();
+  expect(administratorPassword).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username or email").fill(administratorUsername!);
+  await page.getByLabel("Password").fill(administratorPassword!);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL("/");
+  await page.goto("/admin/staff/new");
+  const username = `browser.staff.${Date.now()}`;
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Display name").fill("Browser Test Staff");
+  await page.getByLabel("Cashier / Sales Staff").check();
+  await page.getByRole("button", { name: "Create staff account" }).click();
+  await expect(page.getByRole("status")).toContainText("Staff account created");
+  await page.goto(`/admin/staff?query=${encodeURIComponent(username)}`);
+  await expect(page.getByText(username)).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "PENDING PASSWORD" }),
+  ).toBeVisible();
+  await page
+    .getByRole("row", { name: new RegExp(username) })
+    .getByRole("link")
+    .click();
+  await expect(
+    page.getByText("Activation is unavailable until password enrollment"),
+  ).toBeVisible();
+  await page.goto(`/admin/staff/${process.env.LUMINA_E2E_SUPER_ID}`);
+  await expect(page.getByText("This page could not be found")).toBeVisible();
+
+  await page.goto(`/admin/staff/${process.env.LUMINA_E2E_ADMIN_ID}`);
+  await page.getByLabel("Display name").fill("E2E Administrator Updated");
+  await page.getByRole("button", { name: "Save profile" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+test("supervisor receives a restricted staff directory projection", async ({
+  page,
+}) => {
+  await signInWith(
+    page,
+    process.env.LUMINA_E2E_SUPERVISOR_USERNAME,
+    process.env.LUMINA_E2E_SUPERVISOR_PASSWORD,
+  );
+  await page.goto(
+    `/admin/staff?query=${encodeURIComponent(process.env.LUMINA_E2E_SUPER_USERNAME!)}`,
+  );
+  await expect(
+    page.getByRole("heading", { name: "Staff directory" }),
+  ).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Email" })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText("E2E Protected Administrator")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Create staff" })).toHaveCount(0);
+});
+
+test("Super Administrator can access protected staff and role creation", async ({
+  page,
+}) => {
+  await signInWith(
+    page,
+    process.env.LUMINA_E2E_SUPER_USERNAME,
+    process.env.LUMINA_E2E_SUPER_PASSWORD,
+  );
+  await page.goto(
+    `/admin/staff?query=${encodeURIComponent(process.env.LUMINA_E2E_SUPER_USERNAME!)}`,
+  );
+  await expect(page.getByText("E2E Protected Administrator")).toBeVisible();
+  await page.goto("/admin/roles/new");
+  await expect(
+    page.getByRole("heading", { name: "Create configurable role" }),
+  ).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.locator(":focus")).toBeVisible();
+});
+
 async function signIn(
   page: import("@playwright/test").Page,
   identifier: string,
 ) {
   await page.getByLabel("Username or email").fill(identifier);
   await page.getByLabel("Password").fill(password!);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL("/");
+}
+
+async function signInWith(
+  page: import("@playwright/test").Page,
+  identifier: string | undefined,
+  fixturePassword: string | undefined,
+) {
+  expect(identifier).toBeTruthy();
+  expect(fixturePassword).toBeTruthy();
+  await page.goto("/login");
+  await page.getByLabel("Username or email").fill(identifier!);
+  await page.getByLabel("Password").fill(fixturePassword!);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL("/");
 }
