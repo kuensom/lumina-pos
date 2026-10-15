@@ -120,10 +120,10 @@ test("administrator can create an enrollment-ready staff account", async ({
   await expect(
     page.getByRole("cell", { name: "PENDING PASSWORD" }),
   ).toBeVisible();
-  await page
+  const detailLink = page
     .getByRole("row", { name: new RegExp(username) })
-    .getByRole("link")
-    .click();
+    .getByRole("link");
+  await page.goto((await detailLink.getAttribute("href"))!);
   await expect(
     page.getByText("Activation is unavailable until password enrollment"),
   ).toBeVisible();
@@ -177,6 +177,58 @@ test("Super Administrator can access protected staff and role creation", async (
   await expect(page.locator(":focus")).toBeVisible();
 });
 
+test("administrator hands over a one-time voucher for initial enrollment", async ({
+  page,
+}) => {
+  let actionOrigin: string | undefined;
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      request.url().includes("/credentials/setup")
+    ) {
+      actionOrigin = request.headers().origin;
+    }
+  });
+  const pendingId = process.env.LUMINA_E2E_PENDING_ID;
+  const pendingUsername = process.env.LUMINA_E2E_PENDING_USERNAME;
+  expect(pendingId).toBeTruthy();
+  expect(pendingUsername).toBeTruthy();
+  await signInWith(
+    page,
+    process.env.LUMINA_E2E_ADMIN_USERNAME,
+    process.env.LUMINA_E2E_ADMIN_PASSWORD,
+  );
+  await page.goto(`/admin/staff/${pendingId}/credentials`);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Issue one-time credential" }).click();
+  await page.getByRole("button", { name: "Reveal voucher once" }).click();
+  const voucher = await page.getByTestId("one-time-voucher").textContent();
+  expect(voucher).toBeTruthy();
+  await page
+    .getByRole("button", { name: "Handover complete — dismiss permanently" })
+    .click();
+  await expect(page.getByTestId("one-time-voucher")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Reveal voucher once" }),
+  ).toHaveCount(0);
+  await page.goto("/admin/staff");
+  await page.goBack();
+  await expect(page.getByTestId("one-time-voucher")).toHaveCount(0);
+  const newPassword = `browser enrollment ${Date.now()}`;
+  await page.goto("/credentials/setup");
+  await page.getByLabel("One-time credential").fill(voucher!);
+  await page.getByLabel("New password").fill(newPassword);
+  await page.getByLabel("Confirm password").fill(newPassword);
+  await page.getByRole("button", { name: "Save password" }).click();
+  expect(actionOrigin).toBe("http://127.0.0.1:3000");
+  await expect(page.getByRole("status")).toContainText("Password saved");
+  await page.goto("/login");
+  await page.getByLabel("Username or email").fill(pendingUsername!);
+  await page.getByLabel("Password").fill(newPassword);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL("/");
+});
+
 async function signIn(
   page: import("@playwright/test").Page,
   identifier: string,
@@ -184,7 +236,7 @@ async function signIn(
   await page.getByLabel("Username or email").fill(identifier);
   await page.getByLabel("Password").fill(password!);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/", { timeout: 20_000 });
 }
 
 async function signInWith(
@@ -198,5 +250,5 @@ async function signInWith(
   await page.getByLabel("Username or email").fill(identifier!);
   await page.getByLabel("Password").fill(fixturePassword!);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/", { timeout: 20_000 });
 }

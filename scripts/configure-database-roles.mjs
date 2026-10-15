@@ -104,6 +104,9 @@ async function configureRuntimePrivileges() {
   await execute(
     `GRANT SELECT, INSERT, UPDATE ON TABLE password_reset_grants TO ${runtime}`,
   );
+  await execute(
+    `GRANT SELECT, INSERT, UPDATE ON TABLE credential_grant_deliveries TO ${runtime}`,
+  );
   await execute(`GRANT SELECT, INSERT ON TABLE audit_events TO ${runtime}`);
   await execute(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE auth_rate_limit_buckets TO ${runtime}`,

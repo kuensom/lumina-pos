@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  INITIAL_PERMISSIONS,
+  INITIAL_ROLES,
+} from "../../src/modules/identity/domain/catalog";
 import { seedInitialIdentityCatalog } from "../../src/modules/identity/infrastructure/catalog-repository";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -37,7 +41,7 @@ describe("identity catalogue persistence", () => {
 
     expect(second).toEqual(first);
     expect(first.roles).toBe(5);
-    expect(first.permissions).toBe(20);
+    expect(first.permissions).toBe(22);
     expect(first.grants).toBeGreaterThan(20);
   });
 
@@ -636,9 +640,15 @@ async function catalogueCounts(): Promise<{
   grants: number;
 }> {
   const [roles, permissions, grants] = await Promise.all([
-    prisma.role.count(),
-    prisma.permission.count(),
-    prisma.rolePermission.count(),
+    prisma.role.count({
+      where: { code: { in: INITIAL_ROLES.map(({ code }) => code) } },
+    }),
+    prisma.permission.count({
+      where: { code: { in: INITIAL_PERMISSIONS.map(({ code }) => code) } },
+    }),
+    prisma.rolePermission.count({
+      where: { role: { code: { in: INITIAL_ROLES.map(({ code }) => code) } } },
+    }),
   ]);
   return { roles, permissions, grants };
 }

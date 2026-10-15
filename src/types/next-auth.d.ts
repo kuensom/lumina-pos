@@ -6,6 +6,7 @@ declare module "next-auth" {
     sessionId: string;
     sessionBinding: string;
     authzVersion: number;
+    passwordVersion: number;
     signedInAt: number;
     absoluteExpiresAt: number;
   }
@@ -24,6 +25,7 @@ declare module "next-auth/jwt" {
     sessionId?: string;
     sessionBinding?: string;
     authzVersion?: number;
+    passwordVersion?: number;
     signedInAt?: number;
     absoluteExpiresAt?: number;
   }

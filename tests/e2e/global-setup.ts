@@ -77,6 +77,27 @@ export default async function globalSetup() {
     displayName: "E2E Protected Administrator",
     roleCode: "super_administrator",
   });
+  const pendingUsername = `e2e.pending.${suffix}`;
+  const pendingEmail = `e2e.pending.${suffix}@example.test`;
+  const pending = await runtime.user.create({
+    data: {
+      username: pendingUsername,
+      usernameNormalized: pendingUsername,
+      email: pendingEmail,
+      emailNormalized: pendingEmail,
+      displayName: "E2E Pending Staff",
+      status: "PENDING_PASSWORD",
+      passwordHash: null,
+      passwordVersion: 0,
+      roles: {
+        create: {
+          roleId: (
+            await runtime.role.findUniqueOrThrow({ where: { code: "cashier" } })
+          ).id,
+        },
+      },
+    },
+  });
 
   process.env.LUMINA_E2E_USERNAME = username;
   process.env.LUMINA_E2E_EMAIL = email;
@@ -90,6 +111,8 @@ export default async function globalSetup() {
   process.env.LUMINA_E2E_SUPER_USERNAME = superUsername;
   process.env.LUMINA_E2E_SUPER_PASSWORD = superPassword;
   process.env.LUMINA_E2E_SUPER_ID = superAdministrator.id;
+  process.env.LUMINA_E2E_PENDING_ID = pending.id;
+  process.env.LUMINA_E2E_PENDING_USERNAME = pendingUsername;
 
   return async () => {
     const userIds = [
@@ -97,6 +120,7 @@ export default async function globalSetup() {
       administrator.id,
       supervisor.id,
       superAdministrator.id,
+      pending.id,
     ];
     await migration.session.deleteMany({ where: { userId: { in: userIds } } });
     await migration.userRole.deleteMany({ where: { userId: { in: userIds } } });

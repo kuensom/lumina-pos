@@ -21,6 +21,7 @@ export type LoginCandidate = {
   passwordHash: string | null;
   status: "PENDING_PASSWORD" | "ACTIVE" | "INACTIVE" | "LOCKED";
   authzVersion: number;
+  passwordVersion: number;
 };
 
 export async function findLoginCandidate(
@@ -39,6 +40,7 @@ export async function findLoginCandidate(
       passwordHash: true,
       status: true,
       authzVersion: true,
+      passwordVersion: true,
     },
   });
 }
@@ -115,6 +117,7 @@ export async function admitLoginAttempt(input: {
   sessionId: string;
   absoluteExpiresAt: Date;
   authzVersion: number;
+  passwordVersion: number;
   displayName: string;
 } | null> {
   return input.prisma.$transaction(
@@ -147,6 +150,7 @@ export async function admitLoginAttempt(input: {
           passwordHash: true,
           status: true,
           authzVersion: true,
+          passwordVersion: true,
         },
       });
       if (
@@ -170,6 +174,7 @@ export async function admitLoginAttempt(input: {
             input.sessionDigestKey,
           ),
           authzVersion: current.authzVersion,
+          passwordVersion: current.passwordVersion,
           createdAt: input.now,
           lastSeenAt: input.now,
           idleExpiresAt,
@@ -204,6 +209,7 @@ export async function admitLoginAttempt(input: {
         sessionId,
         absoluteExpiresAt,
         authzVersion: current.authzVersion,
+        passwordVersion: current.passwordVersion,
         displayName: current.displayName,
       };
     },

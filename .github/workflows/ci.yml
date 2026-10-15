@@ -38,6 +38,8 @@ jobs:
       DATABASE_URL: postgresql://lumina_ci_runtime:ci-runtime-placeholder@127.0.0.1:5432/lumina_ci?schema=public
       TEST_MIGRATION_DATABASE_URL: postgresql://lumina_ci_migrator:ci-migration-placeholder@127.0.0.1:5432/lumina_ci?schema=public
       TEST_DATABASE_URL: postgresql://lumina_ci_runtime:ci-runtime-placeholder@127.0.0.1:5432/lumina_ci?schema=public
+      SHADOW_DATABASE_URL: postgresql://lumina_ci_migrator:ci-migration-placeholder@127.0.0.1:5432/lumina_ci_shadow?schema=public
+      DATABASE_SAFETY_CONTEXT: ci
       NEXTAUTH_URL: http://127.0.0.1:3000
       TRUST_PROXY_HEADERS: "false"
     steps:
@@ -49,6 +51,8 @@ jobs:
           echo "NEXTAUTH_SECRET=$(openssl rand -base64 48 | tr -d '\n')" >> "$GITHUB_ENV"
           echo "SESSION_DIGEST_KEY=$(openssl rand -base64 32 | tr -d '\n')" >> "$GITHUB_ENV"
           echo "RATE_LIMIT_DIGEST_KEY=$(openssl rand -base64 32 | tr -d '\n')" >> "$GITHUB_ENV"
+          echo "CREDENTIAL_GRANT_DIGEST_KEY=$(openssl rand -base64 32 | tr -d '\n')" >> "$GITHUB_ENV"
+          echo "EMAIL_OUTBOX_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr -d '\n')" >> "$GITHUB_ENV"
 
       - name: Use Node.js 20
         uses: actions/setup-node@v4
@@ -78,8 +82,11 @@ jobs:
       - name: Create isolated database roles
         run: npm run db:roles -- create
 
+      - name: Create dedicated Prisma shadow database
+        run: psql "postgresql://ci_owner:ci-owner-placeholder@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE DATABASE lumina_ci_shadow OWNER lumina_ci_migrator"
+
       - name: Apply database migrations
-        run: DATABASE_URL="$MIGRATION_DATABASE_URL" npx prisma migrate deploy
+        run: npm run db:migrate:deploy
 
       - name: Apply least-privilege runtime grants
         run: npm run db:roles -- grant
@@ -95,6 +102,9 @@ jobs:
 
       - name: Run PostgreSQL integration tests
         run: npm run test:integration
+
+      - name: Check migration drift safely
+        run: npm run prisma:drift
 
       - name: Build application
         run: npm run build
