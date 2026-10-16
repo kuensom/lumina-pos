@@ -5,6 +5,9 @@ export const SECRET_DIGEST_DOMAINS = [
   "password-reset",
   "initial-enrolment",
   "protected-recovery",
+  "credential-enrolment",
+  "credential-recovery",
+  "credential-destination",
   "rate-limit",
 ] as const;
 

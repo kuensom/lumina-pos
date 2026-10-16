@@ -103,6 +103,7 @@ export async function authenticateCredentials(input: {
     sessionId: session.sessionId,
     sessionBinding,
     authzVersion: session.authzVersion,
+    passwordVersion: session.passwordVersion,
     signedInAt: now.getTime(),
     absoluteExpiresAt: session.absoluteExpiresAt.getTime(),
   };

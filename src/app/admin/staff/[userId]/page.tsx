@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 
 import {
   getStaffDetail,
@@ -97,6 +98,14 @@ export default async function StaffDetailPage({
           </dd>
         </div>
       </dl>
+      {canManage ? (
+        <Link
+          href={`/admin/staff/${userId}/credentials`}
+          className="mt-5 inline-block rounded-lg bg-forest px-4 py-2 font-semibold text-white no-underline"
+        >
+          Manage password enrollment or recovery
+        </Link>
+      ) : null}
 
       {canManage ? (
         <div className="mt-8 grid gap-6 lg:grid-cols-2">

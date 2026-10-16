@@ -43,6 +43,7 @@ export const authOptions: NextAuthOptions = {
         token.sessionId = user.sessionId;
         token.sessionBinding = user.sessionBinding;
         token.authzVersion = user.authzVersion;
+        token.passwordVersion = user.passwordVersion;
         token.signedInAt = user.signedInAt;
         token.absoluteExpiresAt = user.absoluteExpiresAt;
       }

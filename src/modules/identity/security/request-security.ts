@@ -27,7 +27,7 @@ export function userAgentSummary(headers: HeaderSource): string | null {
 export function assertSameOrigin(headers: Headers): void {
   const origin = headers.get("origin");
   const configured = process.env.NEXTAUTH_URL;
-  if (!origin || !configured) {
+  if (!origin || origin === "null" || !configured) {
     throw new Error("A canonical origin is required for this request.");
   }
   if (new URL(origin).origin !== new URL(configured).origin) {

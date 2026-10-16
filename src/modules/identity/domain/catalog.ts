@@ -29,6 +29,13 @@ export const INITIAL_PERMISSIONS = [
     "reset_password",
     "Initiate ordinary staff password recovery.",
   ),
+  permission("users", "issue_enrolment", "Issue staff enrolment credentials."),
+  permission(
+    "users",
+    "recover_administrator",
+    "Recover Administrator credentials.",
+    true,
+  ),
   permission(
     "users",
     "manage_super_admin",
@@ -90,6 +97,7 @@ export const INITIAL_ROLES = [
       "users:lock",
       "users:unlock",
       "users:reset_password",
+      "users:issue_enrolment",
       "roles:read",
       "roles:assign",
       "permissions:read",

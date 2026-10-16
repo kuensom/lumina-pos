@@ -5,6 +5,7 @@ export type CreatedAuthenticationSession = {
   sessionId: string;
   sessionBinding: string;
   authzVersion: number;
+  passwordVersion: number;
   signedInAt: number;
   absoluteExpiresAt: number;
 };

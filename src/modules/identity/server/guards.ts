@@ -11,6 +11,7 @@ export type AuthenticatedPrincipal = {
   sessionId: string;
   displayName: string;
   authzVersion: number;
+  passwordVersion: number;
   signedInAt: Date;
   absoluteExpiresAt: Date;
 };
@@ -187,6 +188,8 @@ async function validateInTransaction(
     session.revokedAt ||
     user.status !== "ACTIVE" ||
     session.authzVersion !== user.authzVersion ||
+    session.passwordVersion !== user.passwordVersion ||
+    claims.passwordVersion !== user.passwordVersion ||
     claims.authzVersion !== user.authzVersion ||
     session.idleExpiresAt.getTime() <= now.getTime() ||
     session.absoluteExpiresAt.getTime() <= now.getTime() ||
@@ -277,6 +280,7 @@ function principalFromClaims(claims: AuthClaims): AuthenticatedPrincipal {
     sessionId: claims.sessionId,
     displayName: claims.displayName,
     authzVersion: claims.authzVersion,
+    passwordVersion: claims.passwordVersion,
     signedInAt: new Date(claims.signedInAt),
     absoluteExpiresAt: new Date(claims.absoluteExpiresAt),
   };

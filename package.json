@@ -21,7 +21,15 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:connect": "prisma db execute --schema prisma/schema.prisma --stdin < prisma/connectivity.sql",
-    "db:roles": "node scripts/configure-database-roles.mjs"
+    "db:roles": "node scripts/configure-database-roles.mjs",
+    "db:safety": "node scripts/validate-database-identities.mjs",
+    "db:migrate:deploy": "DATABASE_OPERATION=migrate npm run db:safety && DATABASE_URL=\"$MIGRATION_DATABASE_URL\" prisma migrate deploy",
+    "db:migrate:status": "DATABASE_OPERATION=migrate npm run db:safety && DATABASE_URL=\"$MIGRATION_DATABASE_URL\" prisma migrate status",
+    "db:reset": "DATABASE_OPERATION=reset npm run db:safety && exit 1",
+    "db:rollback:check": "DATABASE_OPERATION=rollback npm run db:safety",
+    "db:rollback:migrate": "DATABASE_OPERATION=rollback npm run db:safety && DATABASE_URL=\"$ROLLBACK_DATABASE_URL\" prisma migrate deploy",
+    "db:rollback:apply": "DATABASE_OPERATION=rollback npm run db:safety && prisma db execute --url \"$ROLLBACK_DATABASE_URL\" --file \"$ROLLBACK_FILE\"",
+    "prisma:drift": "DATABASE_OPERATION=drift npm run db:safety && prisma migrate diff --from-migrations prisma/migrations --to-url \"$MIGRATION_DATABASE_URL\" --shadow-database-url \"$SHADOW_DATABASE_URL\" --exit-code"
   },
   "dependencies": {
     "@node-rs/argon2": "2.2.2",

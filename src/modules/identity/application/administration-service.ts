@@ -188,6 +188,7 @@ export async function createStaff(
           displayName: command.displayName,
           status: "PENDING_PASSWORD",
           passwordHash: null,
+          passwordVersion: 0,
           roles: {
             create: roles.map(({ id }) => ({
               roleId: id,
